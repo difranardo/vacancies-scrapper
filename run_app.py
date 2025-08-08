@@ -10,7 +10,14 @@ import pandas as pd
 from dotenv import load_dotenv
 
 # Módulos propios
-from app.domain.scraper_control import ask_to_stop, get_result, new_job, set_result, stop_job
+from app.domain.scraper_control import (
+    ask_to_stop,
+    get_result,
+    new_job,
+    remove_job,
+    set_result,
+    stop_job,
+)
 from app.infrastructure.bumeran import scrap_jobs_bumeran
 from app.infrastructure.computrabajo import scrape_computrabajo
 from app.infrastructure.zonajobs import scrape_zonajobs
@@ -114,11 +121,18 @@ def download(job_id):
     if data is None:
         abort(404)
     if not data:
+        remove_job(job_id)
         return ("No data", 204)
 
     fmt = request.args.get("fmt", "json").lower()
     filename = f"{job_id}.{ 'xlsx' if fmt == 'excel' else 'json' }"
-    return _excel_response(data, filename) if fmt == "excel" else _json_response(data, filename)
+    resp = (
+        _excel_response(data, filename)
+        if fmt == "excel"
+        else _json_response(data, filename)
+    )
+    remove_job(job_id)
+    return resp
 
 # Helpers de respuesta
 def _json_response(payload: list[dict[str, Any]], filename: str):
