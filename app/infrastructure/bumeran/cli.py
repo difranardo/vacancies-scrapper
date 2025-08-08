@@ -3,7 +3,7 @@ import argparse
 import json
 import pandas as pd
 
-from . import scrap_jobs_bumeran
+from app.infrastructure.bumeran import scrap_jobs_bumeran
 
 
 def main() -> None:
