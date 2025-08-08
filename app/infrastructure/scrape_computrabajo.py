@@ -231,7 +231,7 @@ if __name__ == '__main__':
     resultados = scrape_computrabajo(
         categoria=args.categoria,
         lugar=args.lugar,
-        pages=args.pages
+        max_pages=args.pages
     )
 
     if resultados:
