@@ -236,7 +236,7 @@ class BumeranScraper:
             return False
 
 
-def scrap_jobs_bumeran(
+def scrape_bumeran(
     *,
     query: str = "",
     location: str = "",
