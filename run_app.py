@@ -79,6 +79,13 @@ def _worker_scrape(
         except Exception:
             app.logger.warning("Parametro de páginas inválido: %s", max_pages)
 
+    headless = data.get("headless")
+    if headless is not None:
+        if isinstance(headless, str):
+            kwargs["headless"] = headless.lower() in ("1", "true", "yes", "y")
+        else:
+            kwargs["headless"] = bool(headless)
+
     app.logger.debug("Scraper %s – kwargs: %s", portal, kwargs)
 
     # Ejecución y manejo de errores

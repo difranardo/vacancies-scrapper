@@ -11,12 +11,14 @@ def main() -> None:
     parser.add_argument("--query", default="")
     parser.add_argument("--location", default="")
     parser.add_argument("--pages", type=int, default=None)
+    parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
     resultados = scrape_zonajobs(
         query=args.query,
         location=args.location,
         max_pages=args.pages,
+        headless=args.headless,
     )
 
     if resultados:
