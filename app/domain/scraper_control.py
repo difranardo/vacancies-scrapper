@@ -33,3 +33,8 @@ def set_result(job_id: str, data):
 def get_result(job_id: str):
     with _LOCK:
         return _JOBS.get(job_id, {}).get("result")
+
+def remove_job(job_id: str) -> None:
+    """Elimina completamente un job del registro."""
+    with _LOCK:
+        _JOBS.pop(job_id, None)
