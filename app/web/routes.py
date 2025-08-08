@@ -13,7 +13,7 @@ from flask import (
 )
 
 from app.domain.scraper_control import get_result, new_job, set_result, stop_job
-from app.infrastructure.scrape_bumeran import scrap_jobs_bumeran
+from app.infrastructure.scrape_bumeran import scrape_bumeran
 from app.infrastructure.scrape_computrabajo import scrape_computrabajo
 from app.infrastructure.scrape_zonajobs import scrape_zonajobs
 
@@ -22,7 +22,7 @@ from .worker import _excel_response, _json_response, _worker_scrape
 bp = Blueprint("web", __name__)
 
 SCRAPERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
-    "bumeran": scrap_jobs_bumeran,
+    "bumeran": scrape_bumeran,
     "zonajobs": scrape_zonajobs,
     "computrabajo": scrape_computrabajo,
 }
