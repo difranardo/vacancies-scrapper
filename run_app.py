@@ -11,9 +11,9 @@ from dotenv import load_dotenv
 
 # Módulos propios
 from app.domain.scraper_control import ask_to_stop, get_result, new_job, set_result, stop_job
-from app.infrastructure.scrape_bumeran import scrap_jobs_bumeran
-from app.infrastructure.scrape_computrabajo import scrape_computrabajo
-from app.infrastructure.scrape_zonajobs import scrape_zonajobs
+from app.infrastructure.bumeran import scrap_jobs_bumeran
+from app.infrastructure.computrabajo import scrape_computrabajo
+from app.infrastructure.zonajobs import scrape_zonajobs
 
 load_dotenv()
 app = Flask(__name__)
