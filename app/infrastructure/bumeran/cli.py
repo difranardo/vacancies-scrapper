@@ -3,8 +3,10 @@ import argparse
 import json
 import pandas as pd
 
+
 from app.logging_utils import get_logger
 from . import scrap_jobs_bumeran
+
 
 
 def main() -> None:
