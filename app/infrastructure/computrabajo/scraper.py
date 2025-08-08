@@ -4,6 +4,8 @@ import urllib.parse as ul
 from typing import Any, Dict, List, Optional
 from app.infrastructure.utils import parse_fecha_publicacion
 
+from app.logging_utils import get_logger
+
 BASE_URL = "https://ar.computrabajo.com/"
 TIMEOUT = 15_000
 # Selectores para listados y detalle
@@ -48,7 +50,7 @@ class ComputrabajoScraper:
 
         while True:
             if self.job_id and ask_to_stop(self.job_id):
-                print("[INFO] Scraping detenido por usuario")
+                get_logger().info("Scraping detenido por usuario")
                 break
 
             links = self._scrape_listing()
@@ -59,7 +61,9 @@ class ComputrabajoScraper:
                     data = self._scrape_detail(url)
                     self.results.append(data)
                 except Exception as e:
-                    print(f"[WARN] Error al raspar detalle {url}: {e}")
+                    get_logger().warning(
+                        "Error al raspar detalle %s: %s", url, e
+                    )
 
             if self.job_id and ask_to_stop(self.job_id):
                 break

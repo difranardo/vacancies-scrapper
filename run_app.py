@@ -3,9 +3,12 @@ from __future__ import annotations
 import threading
 from typing import Any, Callable
 
-from flask import Flask, abort, jsonify, request, render_template
+from flask import Flask, abort, current_app, jsonify, request, send_file, render_template
+
 from flask_cors import CORS
 from dotenv import load_dotenv
+
+from app.logging_utils import configure_logging
 
 # Módulos propios
 from app.domain.scraper_control import get_result, new_job, set_result, stop_job
@@ -17,6 +20,7 @@ from app.infrastructure.worker import _excel_response, _json_response, _worker_s
 load_dotenv()
 app = Flask(__name__)
 CORS(app)
+configure_logging(app)
 
 SCRAPERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
     "bumeran": scrap_jobs_bumeran,
@@ -34,9 +38,9 @@ def health():
 
 @app.post("/scrape")
 def start_scrape():
-    print("LLEGÓ UNA REQUEST A /scrape")  # Debug
-    data   = request.get_json(force=True)
-    print(f"Payload recibido: {data}")
+    current_app.logger.debug("LLEGÓ UNA REQUEST A /scrape")
+    data = request.get_json(force=True)
+    current_app.logger.debug("Payload recibido: %s", data)
     portal = data.get("sitio")
     fmt    = data.get("formato", "json")
     func   = SCRAPERS.get(portal)
@@ -52,6 +56,46 @@ def start_scrape():
     ).start()
 
     return jsonify(job_id=job_id, fmt=fmt, portal=portal)
+
+
+def _worker_scrape(
+    portal: str, data: dict, job_id: str, func: Callable, set_result: Callable, app: Flask
+):
+    with app.app_context():
+        kwargs: dict[str, Any] = {"job_id": job_id}
+        cargo = data.get("cargo", "").strip()
+        ubic = data.get("ubicacion", "").strip()
+
+        # Cargar parámetros base según el portal
+        if portal == "computrabajo":
+            kwargs["categoria"] = cargo
+            kwargs["lugar"] = ubic
+        elif portal in ("bumeran", "zonajobs", "mpar"):
+            if cargo:
+                kwargs["query"] = cargo
+            if ubic:
+                kwargs["location"] = ubic
+
+        # Permitir límite de páginas si lo pasan desde el front
+        max_pages = data.get("pages") or data.get("max_pages")
+        if max_pages:
+            try:
+                kwargs["max_pages"] = int(max_pages)
+            except Exception:
+                current_app.logger.warning(
+                    "Parametro de páginas inválido: %s", max_pages
+                )
+
+        current_app.logger.debug("Scraper %s – kwargs: %s", portal, kwargs)
+
+        # Ejecución y manejo de errores
+        try:
+            res = func(**kwargs)
+        except Exception as exc:
+            current_app.logger.exception("Scraper %s falló: %s", portal, exc)
+            res = []
+        set_result(job_id, res)
+
 
 @app.post("/stop-scrape")
 def stop_scrape():
