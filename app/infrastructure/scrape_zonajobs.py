@@ -20,7 +20,7 @@ except ImportError:
 BASE_URL = "https://www.zonajobs.com.ar/"
 LISTING_SELECTOR = "div#listado-avisos a.sc-ddcOto"
 DETAIL_CONTAINER = "#section-detalle"
-TIMEOUT = TIMEOUT = 30_000         
+TIMEOUT = 30_000
 NEXT_BTN_SELECTOR = "a.sc-dzVpKk.hFOZsP:not([disabled])"
 
 def slugify(text: str) -> str:
@@ -328,7 +328,7 @@ def scrape_zonajobs(
                 browser=browser,
                 query=query or os.getenv("ZJ_QUERY", ""),
                 location=location or os.getenv("ZJ_LOCATION", ""),
-                max_pages=pages,               
+                max_pages=pages,
                 job_id=job_id,
             ).run()
         finally:
