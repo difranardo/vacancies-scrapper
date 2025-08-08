@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="es">
+  <head>
+    <meta charset="utf-8">
+    <title>Vacancies Scraper</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='styles.css') }}">
+    <!--  Opcional: CDN de Bootstrap  -->
+  </head>
+  <body class="container py-4">
+    {% block content %}{% endblock %}
+    <script src="{{ url_for('static', filename='main.js') }}"></script>
+  </body>
+</html>
