@@ -2,7 +2,7 @@ from __future__ import annotations
 import os
 import urllib.parse as ul
 from typing import Any, Dict, List
-from playwright.sync_api import Browser, Page, sync_playwright, TimeoutError as PWTimeoutError
+from playwright.sync_api import Browser, Page, TimeoutError as PWTimeoutError
 
 from app.infrastructure.utils import parse_fecha_publicacion
 
@@ -236,21 +236,16 @@ class BumeranScraper:
             return False
 
 
-def scrap_jobs_bumeran(
+def scrape_bumeran(
     *,
+    browser: Browser,
     query: str = "",
     location: str = "",
     max_pages: int | None = None,
     job_id: str | None = None,
-    headless: bool = True
 ) -> List[Dict[str, Any]]:
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False, args=["--start-maximized"])
-        try:
-            scraper = BumeranScraper(
-                browser, query=query, location=location, max_pages=max_pages, job_id=job_id
-            )
-            return scraper.run()
-        finally:
-            browser.close()
+    scraper = BumeranScraper(
+        browser, query=query, location=location, max_pages=max_pages, job_id=job_id
+    )
+    return scraper.run()
 
