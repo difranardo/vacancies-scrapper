@@ -1,10 +1,8 @@
-from playwright.sync_api import sync_playwright, Browser, Page, TimeoutError
+from playwright.sync_api import Browser, Page, TimeoutError
 from app.domain.scraper_control import ask_to_stop
 import urllib.parse as ul
 from datetime import datetime, timedelta
 import re
-import pandas as pd
-import json
 from typing import Any, Dict, List, Optional
 
 BASE_URL = "https://ar.computrabajo.com/"
@@ -207,38 +205,3 @@ class ComputrabajoScraper:
             except:
                 continue
 
-
-def scrape_computrabajo(
-    *, categoria: str, lugar: str, job_id: Optional[str] = None, max_pages: Optional[int] = None
-) -> List[Dict[str, Any]]:
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(channel="chrome", headless=False, args=["--start-maximized"])
-        try:
-            scraper = ComputrabajoScraper(browser, categoria, lugar, max_pages, job_id)
-            return scraper.run()
-        finally:
-            browser.close()
-
-if __name__ == '__main__':
-    import argparse
-
-    parser = argparse.ArgumentParser(description='Scrapea Computrabajo')
-    parser.add_argument('--categoria', required=True)
-    parser.add_argument('--lugar', required=True)
-    parser.add_argument('--pages', type=int, default=None)
-    args = parser.parse_args()
-
-    resultados = scrape_computrabajo(
-        categoria=args.categoria,
-        lugar=args.lugar,
-        pages=args.pages
-    )
-
-    if resultados:
-        df = pd.DataFrame(resultados)
-        df.to_excel('computrabajo.xlsx', index=False)
-        with open('computrabajo.json', 'w', encoding='utf-8') as f:
-            json.dump(resultados, f, ensure_ascii=False, indent=2)
-        print(f"[SUCCESS] {len(resultados)} registros exportados.")
-    else:
-        print("[INFO] No se extrajeron datos.")

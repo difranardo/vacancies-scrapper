@@ -13,7 +13,7 @@ from flask import (
 )
 
 from app.domain.scraper_control import get_result, new_job, set_result, stop_job
-from app.infrastructure.scrape_bumeran import scrape_bumeran
+from app.infrastructure.bumeran.scraper import scrape_bumeran
 from app.infrastructure.computrabajo import scrape_computrabajo
 from app.infrastructure.zonajobs import scrape_zonajobs
 

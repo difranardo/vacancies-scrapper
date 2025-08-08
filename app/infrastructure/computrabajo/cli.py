@@ -1,3 +1,4 @@
+from __future__ import annotations
 import argparse
 import json
 import pandas as pd
@@ -10,19 +11,12 @@ def main() -> None:
     parser.add_argument("--categoria", required=True)
     parser.add_argument("--lugar", required=True)
     parser.add_argument("--pages", type=int, default=None)
-    parser.add_argument(
-        "--headless",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Ejecuta el navegador en modo headless",
-    )
     args = parser.parse_args()
 
     resultados = scrape_computrabajo(
         categoria=args.categoria,
         lugar=args.lugar,
         max_pages=args.pages,
-        headless=args.headless,
     )
 
     if resultados:
@@ -37,4 +31,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
