@@ -271,9 +271,12 @@ class ZonaJobsScraper:
         return data
 
 def scrape_zonajobs(
-    *, job_id: Optional[str] = None,
-    query: str = "", location: str = "",
-    max_pages: Optional[int] = None,   
+    *,
+    job_id: Optional[str] = None,
+    query: str = "",
+    location: str = "",
+    max_pages: Optional[int] = None,
+    headless: bool = True,
     **_
 ) -> List[Dict[str, Any]]:
 
@@ -284,7 +287,9 @@ def scrape_zonajobs(
         else int(env_pages) if env_pages and env_pages.isdigit() else None
     )
     with sync_playwright() as pw:
-        browser = pw.chromium.launch(headless=False, args=["--window-size=1920,1080"],slow_mo=150)
+        browser = pw.chromium.launch(
+            headless=headless, args=["--window-size=1920,1080"], slow_mo=150
+        )
 
         try:
             return ZonaJobsScraper(
