@@ -40,9 +40,9 @@ def health():
 
 @bp.post("/scrape")
 def start_scrape():
-    print("LLEGÓ UNA REQUEST A /scrape")
+    current_app.logger.debug("LLEGÓ UNA REQUEST A /scrape")
     data = request.get_json(force=True)
-    print(f"Payload recibido: {data}")
+    current_app.logger.debug("Payload recibido: %s", data)
     portal = data.get("sitio")
     fmt = data.get("formato", "json")
     func = SCRAPERS.get(portal)
