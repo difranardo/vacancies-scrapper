@@ -42,7 +42,17 @@ def _worker_scrape(
                     "Parametro de páginas inválido: %s", max_pages
                 )
 
-        current_app.logger.debug("Scraper %s – kwargs: %s", portal, kwargs)
+
+    headless = data.get("headless")
+    if headless is not None:
+        if isinstance(headless, str):
+            kwargs["headless"] = headless.lower() in ("1", "true", "yes", "y")
+        else:
+            kwargs["headless"] = bool(headless)
+
+    app.logger.debug("Scraper %s – kwargs: %s", portal, kwargs)
+
+
 
         try:
             res = func(**kwargs)

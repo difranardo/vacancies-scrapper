@@ -12,12 +12,14 @@ def main() -> None:
     parser.add_argument("--categoria", required=True)
     parser.add_argument("--lugar", required=True)
     parser.add_argument("--pages", type=int, default=None)
+    parser.add_argument("--headless", action=argparse.BooleanOptionalAction, default=True)
     args = parser.parse_args()
 
     resultados = scrape_computrabajo(
         categoria=args.categoria,
         lugar=args.lugar,
         max_pages=args.pages,
+        headless=args.headless,
     )
 
     if resultados:

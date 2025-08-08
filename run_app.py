@@ -97,6 +97,24 @@ def _worker_scrape(
         set_result(job_id, res)
 
 
+    headless = data.get("headless")
+    if headless is not None:
+        if isinstance(headless, str):
+            kwargs["headless"] = headless.lower() in ("1", "true", "yes", "y")
+        else:
+            kwargs["headless"] = bool(headless)
+
+    app.logger.debug("Scraper %s – kwargs: %s", portal, kwargs)
+
+    # Ejecución y manejo de errores
+    try:
+        res = func(**kwargs)
+    except Exception as exc:
+        app.logger.exception("Scraper %s falló: %s", portal, exc)
+        res = []
+    set_result(job_id, res)
+
+
 @app.post("/stop-scrape")
 def stop_scrape():
     payload = request.get_json(silent=True) or {}
