@@ -12,6 +12,7 @@ from flask import (
     request,
 )
 
+
 from app.domain.scraper_control import (
     get_result,
     new_job,
@@ -20,6 +21,7 @@ from app.domain.scraper_control import (
     stop_job,
 )
 from app.infrastructure.bumeran.scraper import scrape_bumeran
+
 from app.infrastructure.computrabajo import scrape_computrabajo
 from app.infrastructure.zonajobs import scrape_zonajobs
 
@@ -28,7 +30,7 @@ from .worker import _excel_response, _json_response, _worker_scrape
 bp = Blueprint("web", __name__)
 
 SCRAPERS: dict[str, Callable[..., list[dict[str, Any]]]] = {
-    "bumeran": scrape_bumeran,
+    "bumeran": scrap_jobs_bumeran,
     "zonajobs": scrape_zonajobs,
     "computrabajo": scrape_computrabajo,
 }
@@ -46,9 +48,9 @@ def health():
 
 @bp.post("/scrape")
 def start_scrape():
-    print("LLEGÓ UNA REQUEST A /scrape")
+    current_app.logger.debug("LLEGÓ UNA REQUEST A /scrape")
     data = request.get_json(force=True)
-    print(f"Payload recibido: {data}")
+    current_app.logger.debug("Payload recibido: %s", data)
     portal = data.get("sitio")
     fmt = data.get("formato", "json")
     func = SCRAPERS.get(portal)

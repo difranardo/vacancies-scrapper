@@ -1,10 +1,11 @@
 from __future__ import annotations
 import os
-from datetime import datetime, timedelta
-import re
 import urllib.parse as ul
 from typing import Any, Dict, List
 from playwright.sync_api import Browser, Page, sync_playwright, TimeoutError as PWTimeoutError
+from app.infrastructure.utils import parse_fecha_publicacion
+
+from app.logging_utils import get_logger
 
 try:
     from app.domain.scraper_control import ask_to_stop
@@ -20,44 +21,6 @@ DETAIL_CONTAINER = "#section-detalle"
 TIMEOUT = 15_000
 ZERO_JOBS_SEL = "span.sc-SxrYz.cBtoeQ:has-text('0')"
 NEXT_BTN = "a.sc-dzVpKk.hFOZsP"
-
-def parse_fecha_publicacion(texto: str) -> str:
-    """Convierte fechas relativas en texto a fecha absoluta dd/mm/yyyy"""
-    if not texto:
-        return ""
-    hoy = datetime.now()
-
-    # Hace X días/horas/minutos
-    match = re.search(r"hace (\d+) (minuto|minutos|hora|horas|día|días)", texto, re.IGNORECASE)
-    if match:
-        valor, unidad = int(match.group(1)), match.group(2)
-        if "minuto" in unidad:
-            fecha = hoy - timedelta(minutes=valor)
-        elif "hora" in unidad:
-            fecha = hoy - timedelta(hours=valor)
-        elif "día" in unidad:
-            fecha = hoy - timedelta(days=valor)
-        else:
-            fecha = hoy
-        return fecha.strftime("%d/%m/%Y")
-
-    # Hace más de X días
-    match = re.search(r"hace más de (\d+) días", texto, re.IGNORECASE)
-    if match:
-        valor = int(match.group(1))
-        fecha = hoy - timedelta(days=valor)
-        return fecha.strftime("%d/%m/%Y")
-
-    # Ayer
-    if "ayer" in texto.lower():
-        fecha = hoy - timedelta(days=1)
-        return fecha.strftime("%d/%m/%Y")
-
-    # Solo "actualizada" (sin otra info) → dejar vacío, o podés poner la fecha de hoy
-    if "actualizada" in texto.lower():
-        return ""  # o return hoy.strftime("%d/%m/%Y") si preferís
-
-    return hoy.strftime("%d/%m/%Y")  # fallback por si hay algo nuevo
 
 class BumeranScraper:
     def __init__(
@@ -83,10 +46,12 @@ class BumeranScraper:
         page_num = 1
         while True:
             if self.max_pages and page_num > self.max_pages:
-                print(f"[INFO] Máximo de páginas ({self.max_pages}) alcanzado, deteniendo.")
+                get_logger().info(
+                    "Máximo de páginas (%s) alcanzado, deteniendo.", self.max_pages
+                )
                 break
             if self.job_id and ask_to_stop(self.job_id):
-                print("[INFO] Scraping detenido por usuario.")
+                get_logger().info("Scraping detenido por usuario.")
                 break
             hrefs = self._get_listing_hrefs()
             if not hrefs:
@@ -97,7 +62,7 @@ class BumeranScraper:
                 try:
                     self.results.append(self._scrape_detail(url))
                 except Exception as exc:
-                    print(f"[WARN] {url}: {exc}")
+                    get_logger().warning("%s: %s", url, exc)
 
             page_num += 1
             if not self._go_to_page(page_num):
@@ -124,7 +89,7 @@ class BumeranScraper:
 
         # 1. Click placeholder de puesto PARA DESPERTAR EL INPUT
         if self.query:
-            print("[DEBUG] Click placeholder puesto")
+            get_logger().debug("Click placeholder puesto")
             p.wait_for_selector("div.select__placeholder:has-text('Buscar empleo por puesto o palabra clave')", timeout=TIMEOUT)
             ph_puesto = p.locator("div.select__placeholder:has-text('Buscar empleo por puesto o palabra clave')").first
             # Simula doble click para forzar apertura de input
@@ -154,7 +119,7 @@ class BumeranScraper:
         p.wait_for_timeout(2000)
         # 2. Click placeholder de ubicación PARA DESPERTAR EL INPUT
         if self.location:
-            print("[DEBUG] Click placeholder ubicación")
+            get_logger().debug("Click placeholder ubicación")
             p.wait_for_selector("div.select__placeholder:has-text('Lugar de trabajo')", timeout=TIMEOUT)
             ph_ubic = p.locator("div.select__placeholder:has-text('Lugar de trabajo')").first
             ph_ubic.click(force=True)
@@ -176,7 +141,7 @@ class BumeranScraper:
                 raise RuntimeError("No se pudo encontrar input de ubicación habilitado/visible")
 
         # 3. Click buscar
-        print("[DEBUG] Click en buscar trabajo")
+        get_logger().debug("Click en buscar trabajo")
         # ¡Usá el selector más específico!
         boton_buscar = p.locator("button.sc-btzYZH[type='link']").first
         boton_buscar.scroll_into_view_if_needed()
@@ -188,7 +153,7 @@ class BumeranScraper:
         # 4. Espera resultados
         if p.locator(ZERO_JOBS_SEL).count():
             self.filtered_base_url = None
-            print("[DEBUG] 0 resultados, abortando búsqueda.")
+            get_logger().debug("0 resultados, abortando búsqueda.")
             return
 
         p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
