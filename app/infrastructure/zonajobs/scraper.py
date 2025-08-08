@@ -1,11 +1,13 @@
 import os
-from datetime import datetime, timedelta
 import time
 import re
 import unicodedata
 import urllib.parse as ul
 from typing import Any, Dict, List, Optional
 from playwright.sync_api import Browser, Page, TimeoutError
+from app.infrastructure.utils import parse_fecha_publicacion
+
+from app.logging_utils import get_logger
 
 
 try:
@@ -24,45 +26,6 @@ def slugify(text: str) -> str:
     norm = unicodedata.normalize("NFKD", text)
     ascii_ = norm.encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^a-z0-9]+", "-", ascii_.lower()).strip("-")
-
-def parse_fecha_publicacion(texto: str) -> str:
-    """Convierte fechas relativas en texto a fecha absoluta dd/mm/yyyy"""
-    if not texto:
-        return ""
-    hoy = datetime.now()
-
-    # Hace X días/horas/minutos
-    match = re.search(r"hace (\d+) (minuto|minutos|hora|horas|día|días)", texto, re.IGNORECASE)
-    if match:
-        valor, unidad = int(match.group(1)), match.group(2)
-        if "minuto" in unidad:
-            fecha = hoy - timedelta(minutes=valor)
-        elif "hora" in unidad:
-            fecha = hoy - timedelta(hours=valor)
-        elif "día" in unidad:
-            fecha = hoy - timedelta(days=valor)
-        else:
-            fecha = hoy
-        return fecha.strftime("%d/%m/%Y")
-
-    # Hace más de X días
-    match = re.search(r"hace más de (\d+) días", texto, re.IGNORECASE)
-    if match:
-        valor = int(match.group(1))
-        fecha = hoy - timedelta(days=valor)
-        return fecha.strftime("%d/%m/%Y")
-
-    # Ayer
-    if "ayer" in texto.lower():
-        fecha = hoy - timedelta(days=1)
-        return fecha.strftime("%d/%m/%Y")
-
-    # Solo "actualizada" (sin otra info) → dejar vacío, o podés poner la fecha de hoy
-    if "actualizada" in texto.lower():
-        return ""  # o return hoy.strftime("%d/%m/%Y") si preferís
-
-    return hoy.strftime("%d/%m/%Y")  # fallback por si hay algo nuevo
-
 
 class ZonaJobsScraper:
     def __init__(
@@ -102,20 +65,24 @@ class ZonaJobsScraper:
         self._login()
         page_num = 1
         total_pages = self._get_total_pages()
-        print(f"[INFO] Total de páginas detectado: {total_pages}")
+        get_logger().info("Total de páginas detectado: %s", total_pages)
         limit_pages = min(self.max_pages if self.max_pages else total_pages, total_pages)
         while page_num <= limit_pages:
-            print(f"[DEBUG] Scrapeando página {page_num}")
+            get_logger().debug("Scrapeando página %s", page_num)
             hrefs = self._get_listing_hrefs(page_num)
 
             # Si no hay avisos, reintentar una vez (por si fue loader/lentitud)
             if not hrefs:
-                print(f"[WARN] Página {page_num} sin avisos, reintentando 1 vez...")
+                get_logger().warning(
+                    "Página %s sin avisos, reintentando 1 vez...", page_num
+                )
                 self.page.reload()
                 self.page.wait_for_timeout(2000)  # Espera un poco por las dudas
                 hrefs = self._get_listing_hrefs(page_num)
                 if not hrefs:
-                    print(f"[INFO] No hay avisos en la página {page_num}, deteniendo.")
+                    get_logger().info(
+                        "No hay avisos en la página %s, deteniendo.", page_num
+                    )
                     break
 
             for url in hrefs:
@@ -124,7 +91,7 @@ class ZonaJobsScraper:
                 try:
                     self.results.append(self._scrape_detail(url))
                 except Exception as e:
-                    print(f"[WARN] Error scrapeando {url}: {e}")
+                    get_logger().warning("Error scrapeando %s: %s", url, e)
                     continue
 
             page_num += 1
@@ -176,10 +143,10 @@ class ZonaJobsScraper:
         p.wait_for_selector("#listado-avisos", timeout=TIMEOUT)
         avisos = p.locator(LISTING_SELECTOR)
         n_avisos = avisos.count()
-        print(f"[DEBUG] Avisos encontrados: {n_avisos}")
+        get_logger().debug("Avisos encontrados: %s", n_avisos)
         if n_avisos == 0:
             self.filtered_base_url = None
-            print("[INFO] No hay avisos en el listado, abortando búsqueda")
+            get_logger().info("No hay avisos en el listado, abortando búsqueda")
             return
         self.filtered_base_url = p.url
 
@@ -192,7 +159,7 @@ class ZonaJobsScraper:
             self.page.wait_for_load_state("networkidle", timeout=TIMEOUT)
             return True
         else:
-            print("[INFO] No hay más páginas (botón next está deshabilitado)")
+            get_logger().info("No hay más páginas (botón next está deshabilitado)")
             return False
 
     def _page_url(self, page: int) -> str:
@@ -212,7 +179,7 @@ class ZonaJobsScraper:
         # Cambio de página
         if page > 1 and self.filtered_base_url:
             if not self._click_next_page():
-                print(f"[INFO] Ya no hay más páginas tras la {page-1}")
+                get_logger().info("Ya no hay más páginas tras la %s", page - 1)
                 return []
         elif page > 1:
             self.page.goto(self._page_url(page), timeout=TIMEOUT)
@@ -238,15 +205,21 @@ class ZonaJobsScraper:
                 # Si el loading desapareció pero no hay avisos, salir igual
                 break
 
-        print(f"[DEBUG] Avisos REALES encontrados en página {page}: {len(urls)}")
+        get_logger().debug(
+            "Avisos REALES encontrados en página %s: %s", page, len(urls)
+        )
 
         if not urls:
             html_debug = self.page.inner_html("#listado-avisos")
-            print(f"[DEBUG] HTML en página {page} (primeros 1000):\n{html_debug[:1000]}")
+            get_logger().debug(
+                "HTML en página %s (primeros 1000):\n%s", page, html_debug[:1000]
+            )
             avisos_alt = self.page.locator("#listado-avisos a")
             urls_alt = avisos_alt.evaluate_all("els => [...new Set(els.map(e => e.href))]")
             urls_alt = [u for u in urls_alt if re.search(r"/empleos/[^.]+-\d+\.html$", u)]
-            print(f"[DEBUG] Selector alternativo encontró: {len(urls_alt)} avisos reales")
+            get_logger().debug(
+                "Selector alternativo encontró: %s avisos reales", len(urls_alt)
+            )
             if urls_alt:
                 return sorted(urls_alt)
             return []

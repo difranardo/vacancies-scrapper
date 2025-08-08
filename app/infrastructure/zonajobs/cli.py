@@ -3,6 +3,7 @@ import argparse
 import json
 import pandas as pd
 
+from app.logging_utils import get_logger
 from . import scrape_zonajobs
 
 
@@ -26,9 +27,9 @@ def main() -> None:
         df.to_excel("zonajobs.xlsx", index=False)
         with open("zonajobs.json", "w", encoding="utf-8") as f:
             json.dump(resultados, f, ensure_ascii=False, indent=2)
-        print(f"[SUCCESS] {len(resultados)} registros exportados.")
+        get_logger().info("%s registros exportados.", len(resultados))
     else:
-        print("[INFO] No se extrajeron datos.")
+        get_logger().info("No se extrajeron datos.")
 
 
 if __name__ == "__main__":
