@@ -2,7 +2,9 @@ from __future__ import annotations
 import os
 import urllib.parse as ul
 from typing import Any, Dict, List
+
 from playwright.sync_api import Browser, Page, TimeoutError as PWTimeoutError
+
 from app.infrastructure.utils import parse_fecha_publicacion
 
 from app.logging_utils import get_logger
@@ -16,7 +18,8 @@ except ImportError:
 BASE_URL = "https://www.bumeran.com.ar/"
 BUM_USER = os.getenv("BUMERAN_USER", "")
 BUM_PASS = os.getenv("BUMERAN_PASS", "")
-LISTING_SELECTOR = "#listado-avisos a.sc-gVZiCL"
+# Selector de avisos basado en atributos más estables
+LISTING_SELECTOR = "#listado-avisos a[href*='/empleos-']"
 DETAIL_CONTAINER = "#section-detalle"
 ZERO_JOBS_SEL = "span.sc-SxrYz.cBtoeQ:has-text('0')"
 NEXT_BTN = "a.sc-dzVpKk.hFOZsP"
@@ -81,8 +84,10 @@ class BumeranScraper:
             self._buscar_con_inputs()
         else:
             self.filtered_base_url = f"{BASE_URL}empleos.html?recientes=true"
+
             p.goto(f"{self.filtered_base_url}&page=1", timeout=self.timeout)
             p.wait_for_selector(LISTING_SELECTOR, timeout=self.timeout)
+
 
 
     def _buscar_con_inputs(self) -> None:
@@ -148,7 +153,12 @@ class BumeranScraper:
         boton_buscar.scroll_into_view_if_needed()
         p.wait_for_timeout(2000)
         boton_buscar.click(force=True)
-        p.wait_for_timeout(600)
+        try:
+            p.wait_for_load_state("networkidle", timeout=TIMEOUT * 2)
+        except PWTimeoutError:
+            get_logger().warning(
+                "La carga excedió el plazo de %s ms tras buscar", TIMEOUT * 2
+            )
 
 
         # 4. Espera resultados
@@ -157,15 +167,20 @@ class BumeranScraper:
             get_logger().debug("0 resultados, abortando búsqueda.")
             return
 
+
         p.wait_for_selector(LISTING_SELECTOR, timeout=self.timeout)
+
         self.filtered_base_url = p.url
 
 
 
     def _get_listing_hrefs(self) -> List[str]:
         p = self.list_page
+
         p.wait_for_selector(LISTING_SELECTOR, timeout=self.timeout)
+
         urls = p.locator(LISTING_SELECTOR).evaluate_all(
+
             "els => Array.from(new Set(els.map(e => e.href)))"
         )  # type: ignore
         return sorted(u for u in urls if u.endswith(".html"))
@@ -231,10 +246,13 @@ class BumeranScraper:
             next_btn = p.locator(NEXT_BTN).first
             if next_btn.count() and next_btn.is_visible():
                 next_btn.click()
+                current_url = p.url
             else:
+
                 url = f"{BASE_URL}empleos.html?recientes=true&palabra={ul.quote_plus(self.query)}&page={num}"
                 p.goto(url, timeout=self.timeout)
             p.wait_for_selector(LISTING_SELECTOR, timeout=self.timeout)
+
             return True
         except PWTimeoutError:
             return False
