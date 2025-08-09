@@ -162,7 +162,12 @@ class BumeranScraper:
         boton_buscar.scroll_into_view_if_needed()
         p.wait_for_timeout(2000)
         boton_buscar.click(force=True)
-        p.wait_for_timeout(600)
+        try:
+            p.wait_for_load_state("networkidle", timeout=TIMEOUT * 2)
+        except PWTimeoutError:
+            get_logger().warning(
+                "La carga excedió el plazo de %s ms tras buscar", TIMEOUT * 2
+            )
 
 
         # 4. Espera resultados

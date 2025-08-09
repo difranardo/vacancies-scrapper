@@ -138,8 +138,12 @@ class ZonaJobsScraper:
             p.keyboard.press("Enter")
         elif self.query:
             p.click("#buscarTrabajo")
-            p.wait_for_timeout(400)
-        p.wait_for_timeout(2000)
+        try:
+            p.wait_for_load_state("networkidle", timeout=TIMEOUT * 2)
+        except TimeoutError:
+            get_logger().warning(
+                "La carga excedió el plazo de %s ms tras buscar", TIMEOUT * 2
+            )
         p.wait_for_selector("#listado-avisos", timeout=TIMEOUT)
         avisos = p.locator(LISTING_SELECTOR)
         n_avisos = avisos.count()
