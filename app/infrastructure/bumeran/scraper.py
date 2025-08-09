@@ -2,7 +2,13 @@ from __future__ import annotations
 import os
 import urllib.parse as ul
 from typing import Any, Dict, List
-from playwright.sync_api import Browser, Page, sync_playwright, TimeoutError as PWTimeoutError
+from playwright.sync_api import (
+    Browser,
+    Page,
+    sync_playwright,
+    TimeoutError as PWTimeoutError,
+    TargetClosedError,
+)
 from app.infrastructure.utils import parse_fecha_publicacion
 
 from app.logging_utils import get_logger
@@ -80,8 +86,16 @@ class BumeranScraper:
             self._buscar_con_inputs()
         else:
             self.filtered_base_url = f"{BASE_URL}empleos.html?recientes=true"
-            p.goto(f"{self.filtered_base_url}&page=1", timeout=TIMEOUT)
-            p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
+            url = f"{self.filtered_base_url}&page=1"
+            p.goto(url, timeout=TIMEOUT)
+            try:
+                p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
+            except TargetClosedError:
+                get_logger().warning("List page closed; recovering")
+                self.list_page = self.context.new_page()
+                p = self.list_page
+                p.goto(url, timeout=TIMEOUT)
+                p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
 
 
     def _buscar_con_inputs(self) -> None:
@@ -156,14 +170,30 @@ class BumeranScraper:
             get_logger().debug("0 resultados, abortando búsqueda.")
             return
 
-        p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
+        current_url = p.url
+        try:
+            p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
+        except TargetClosedError:
+            get_logger().warning("List page closed; recovering")
+            self.list_page = self.context.new_page()
+            p = self.list_page
+            p.goto(current_url, timeout=TIMEOUT)
+            p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
         self.filtered_base_url = p.url
 
 
 
     def _get_listing_hrefs(self) -> List[str]:
         p = self.list_page
-        p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
+        current_url = p.url
+        try:
+            p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
+        except TargetClosedError:
+            get_logger().warning("List page closed; recovering")
+            self.list_page = self.context.new_page()
+            p = self.list_page
+            p.goto(current_url, timeout=TIMEOUT)
+            p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
         urls = p.locator(LISTING_SELECTOR).evaluate_all(
             "els => Array.from(new Set(els.map(e => e.href)))"
         )  # type: ignore
@@ -230,10 +260,20 @@ class BumeranScraper:
             next_btn = p.locator(NEXT_BTN).first
             if next_btn.count() and next_btn.is_visible():
                 next_btn.click()
+                current_url = p.url
             else:
-                url = f"{BASE_URL}empleos.html?recientes=true&palabra={ul.quote_plus(self.query)}&page={num}"
-                p.goto(url, timeout=TIMEOUT)
-            p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
+                current_url = (
+                    f"{BASE_URL}empleos.html?recientes=true&palabra={ul.quote_plus(self.query)}&page={num}"
+                )
+                p.goto(current_url, timeout=TIMEOUT)
+            try:
+                p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
+            except TargetClosedError:
+                get_logger().warning("List page closed; recovering")
+                self.list_page = self.context.new_page()
+                p = self.list_page
+                p.goto(current_url, timeout=TIMEOUT)
+                p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
             return True
         except PWTimeoutError:
             return False
