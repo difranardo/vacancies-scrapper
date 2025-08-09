@@ -22,7 +22,8 @@ except ImportError:
 BASE_URL = "https://www.bumeran.com.ar/"
 BUM_USER = os.getenv("BUMERAN_USER", "")
 BUM_PASS = os.getenv("BUMERAN_PASS", "")
-LISTING_SELECTOR = "#listado-avisos a.sc-gVZiCL"
+# Selector de avisos basado en atributos más estables
+LISTING_SELECTOR = "#listado-avisos a[href*='/empleos-']"
 DETAIL_CONTAINER = "#section-detalle"
 TIMEOUT = 15_000
 ZERO_JOBS_SEL = "span.sc-SxrYz.cBtoeQ:has-text('0')"
@@ -170,6 +171,7 @@ class BumeranScraper:
             get_logger().debug("0 resultados, abortando búsqueda.")
             return
 
+
         current_url = p.url
         try:
             p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
@@ -179,12 +181,14 @@ class BumeranScraper:
             p = self.list_page
             p.goto(current_url, timeout=TIMEOUT)
             p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
+
         self.filtered_base_url = p.url
 
 
 
     def _get_listing_hrefs(self) -> List[str]:
         p = self.list_page
+
         current_url = p.url
         try:
             p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
@@ -195,6 +199,7 @@ class BumeranScraper:
             p.goto(current_url, timeout=TIMEOUT)
             p.wait_for_selector(LISTING_SELECTOR, timeout=TIMEOUT)
         urls = p.locator(LISTING_SELECTOR).evaluate_all(
+
             "els => Array.from(new Set(els.map(e => e.href)))"
         )  # type: ignore
         return sorted(u for u in urls if u.endswith(".html"))
