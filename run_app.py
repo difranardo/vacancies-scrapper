@@ -95,6 +95,15 @@ def _worker_scrape(
                     "Parametro de páginas inválido: %s", max_pages
                 )
 
+        timeout = data.get("timeout")
+        if timeout and portal == "bumeran":
+            try:
+                kwargs["timeout"] = int(timeout)
+            except Exception:
+                current_app.logger.warning(
+                    "Parametro de timeout inválido: %s", timeout
+                )
+
         current_app.logger.debug("Scraper %s – kwargs: %s", portal, kwargs)
 
         # Ejecución y manejo de errores
