@@ -12,12 +12,18 @@ def scrap_jobs_bumeran(
     max_pages: Optional[int] = None,
     job_id: Optional[str] = None,
     headless: bool = True,
+    timeout: int = 15_000,
 ) -> List[Dict[str, Any]]:
     with sync_playwright() as pw:
         browser = pw.chromium.launch(headless=headless, args=["--start-maximized"])
         try:
             scraper = BumeranScraper(
-                browser, query=query, location=location, max_pages=max_pages, job_id=job_id
+                browser,
+                query=query,
+                location=location,
+                max_pages=max_pages,
+                job_id=job_id,
+                timeout=timeout,
             )
             return scraper.run()
         finally:
