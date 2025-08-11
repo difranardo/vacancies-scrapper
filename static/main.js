@@ -16,6 +16,7 @@ var currentJobId = null;      // último job activo
 var activeCtrl   = null;      // AbortController del POST /api/scrape
 var pollTimerId  = 0;         // setTimeout id para polling
 var pollingJobId = null;      // job al que apunta el polling actual
+var pollCtrl     = null;      // AbortController del polling
 
 /* =========================== Utilidades ========================== */
 function show(el){ if (el) el.style.display = "block"; }
@@ -51,10 +52,8 @@ function triggerExcelDownload(jobId){
 }
 
 function clearPolling(){
-  if (pollTimerId){
-    clearTimeout(pollTimerId);
-    pollTimerId = 0;
-  }
+  if (pollTimerId){ clearTimeout(pollTimerId); pollTimerId = 0; }
+  if (pollCtrl){ pollCtrl.abort(); pollCtrl = null; }
   pollingJobId = null;
 }
 
@@ -69,15 +68,17 @@ function resetAfterJob(){
 function startPolling(jobId){
   clearPolling();
   pollingJobId = jobId;
+  pollCtrl = new AbortController();
 
   var delay = 2500;        // ms
   var maxDelay = 15000;
 
   function ping(){
-    if (pollingJobId !== jobId) return;
+    if (!pollCtrl || pollCtrl.signal.aborted || pollingJobId !== jobId) return;
 
-    fetch("/api/download/" + jobId + "?fmt=excel", { method: "HEAD", cache: "no-store" })
+    fetch("/api/download/" + jobId + "?fmt=excel", { method: "HEAD", cache: "no-store", signal: pollCtrl.signal })
       .then(function(res){
+        if (!pollCtrl || pollCtrl.signal.aborted || pollingJobId !== jobId) return;
         if (res.status === 200){
           triggerExcelDownload(jobId);
           resetAfterJob();
@@ -91,6 +92,7 @@ function startPolling(jobId){
         delay = Math.min(Math.floor(delay * 17 / 10), maxDelay);
       })
       .catch(function(){
+        if (!pollCtrl || pollCtrl.signal.aborted || pollingJobId !== jobId) return;
         pollTimerId = setTimeout(ping, delay);
         delay = Math.min(Math.floor(delay * 17 / 10), maxDelay);
       });
