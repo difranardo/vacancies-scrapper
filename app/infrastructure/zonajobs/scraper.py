@@ -1,7 +1,6 @@
 from __future__ import annotations
 import re
 import json
-import time
 import unicodedata
 import urllib.parse as ul
 from typing import Any, Dict, List, Optional
@@ -119,6 +118,9 @@ NEXT_BTN_SELECTOR = "a[aria-label='Siguiente'], a[rel='next'], a.sc-dzVpKk.hFOZs
 # Timeout base (ms)
 TIMEOUT = 25_000
 
+# Tiempo extra (ms) para esperar anclas del listado cuando el primer intento falla
+LISTING_RETRY_TIMEOUT = 6_000
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Utilidades mínimas
@@ -154,12 +156,14 @@ class ZonaJobsScraper:
         location: str = "",
         max_pages: Optional[int] = None,
         job_id: Optional[str] = None,
+        listing_retry_timeout: int = LISTING_RETRY_TIMEOUT,
     ) -> None:
         self.browser = browser
         self.query = (query or "").strip()
         self.location = (location or "").strip()
         self.max_pages = max_pages
         self.job_id = job_id or ""
+        self.listing_retry_timeout = listing_retry_timeout
 
         # Contexto de ventana completa + UA común para evitar variantes raras
         self.context = browser.new_context(
@@ -323,25 +327,15 @@ class ZonaJobsScraper:
     # ── Scrape de listado ─────────────────────────────────────────────────────
     def _get_listing_hrefs(self, page_index: int) -> List[str]:
         """Devuelve URLs únicas de detalle confiables para la página actual."""
-        # Esperar algo de contenido en el listado
-        try:
-            self.page.wait_for_selector(LISTING_ANCHORS, timeout=8_000)
-        except PWTimeoutError:
-            # Puede estar cargando; intentamos un ciclo corto de espera incremental
-            waited = 0.0
-            urls: List[str] = []
-            while waited < 6.0:
-                anchors = self.page.locator(LISTING_ANCHORS)
-                if anchors.count():
-                    urls = anchors.evaluate_all("els => Array.from(new Set(els.map(e => e.href)))")
-                    urls = [u for u in urls if DETAIL_URL_RE.search(u or "")]
-                    if urls:
-                        break
-                time.sleep(0.5)
-                waited += 0.5
-            return sorted(urls)
-
         anchors = self.page.locator(LISTING_ANCHORS)
+        try:
+            anchors.first.wait_for(state="attached", timeout=8_000)
+        except PWTimeoutError:
+            # Puede estar cargando; espera adicional configurable
+            try:
+                anchors.first.wait_for(state="attached", timeout=self.listing_retry_timeout)
+            except PWTimeoutError:
+                return []
         raw = anchors.evaluate_all("els => Array.from(new Set(els.map(e => e.href)))")
         urls = [u for u in raw if u and DETAIL_URL_RE.search(u)]
         return sorted(urls)

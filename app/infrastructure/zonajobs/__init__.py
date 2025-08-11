@@ -3,7 +3,7 @@ import os
 from typing import Any, Dict, List, Optional
 from playwright.sync_api import sync_playwright
 
-from .scraper import ZonaJobsScraper
+from .scraper import ZonaJobsScraper, LISTING_RETRY_TIMEOUT
 
 
 def scrape_zonajobs(
@@ -13,6 +13,7 @@ def scrape_zonajobs(
     location: str = "",
     max_pages: Optional[int] = None,
     headless: bool = True,
+    listing_retry_timeout: int = LISTING_RETRY_TIMEOUT,
     **_
 ) -> List[Dict[str, Any]]:
     env_pages = os.getenv("ZJ_PAGES")
@@ -32,6 +33,7 @@ def scrape_zonajobs(
                 location=location or os.getenv("ZJ_LOCATION", ""),
                 max_pages=pages,
                 job_id=job_id,
+                listing_retry_timeout=listing_retry_timeout,
             ).run()
         finally:
             browser.close()
