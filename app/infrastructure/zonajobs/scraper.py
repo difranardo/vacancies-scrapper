@@ -1,30 +1,25 @@
 from __future__ import annotations
+
 import re
-import json
 import time
 import unicodedata
 import urllib.parse as ul
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, unquote
 
 from playwright.sync_api import Browser, Page, TimeoutError as PWTimeoutError
 
 from app.infrastructure.utils import parse_fecha_publicacion
 from app.infrastructure.common.logging_utils import get_logger
-from app.scraper.application.scraper_control import ask_to_stop, push_result
 
 try:
-    from app.application.scraper_control import ask_to_stop, push_result  # type: ignore
-except Exception:
-    try:
-        from scraper_control import ask_to_stop, push_result  # type: ignore
-    except Exception:
-        def ask_to_stop(job_id: str) -> bool:
-            return False
-        def push_result(job_id: str, item: dict) -> None:
-            pass
+    from app.scraper.application.scraper_control import ask_to_stop, push_result
+except ImportError:
+    def ask_to_stop(job_id: str) -> bool:
+        return False
 
-import re
-from urllib.parse import urlparse, unquote
+    def push_result(job_id: str, item: dict) -> None:
+        pass
 
 BAD_TITLE = re.compile(r"(?:^|\b)(descripci[oó]n del puesto|publicado|actualizado)\b", re.I)
 
