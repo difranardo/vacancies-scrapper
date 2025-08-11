@@ -1,32 +1,151 @@
-import os
-import time
+from __future__ import annotations
 import re
+import json
+import time
 import unicodedata
 import urllib.parse as ul
 from typing import Any, Dict, List, Optional
-from playwright.sync_api import Browser, Page, TimeoutError
+
+from playwright.sync_api import Browser, Page, TimeoutError as PWTimeoutError
+
 from app.infrastructure.utils import parse_fecha_publicacion
-
-from app.logging_utils import get_logger
-
+from app.infrastructure.common.logging_utils import get_logger
+from app.scraper.application.scraper_control import ask_to_stop, push_result
 
 try:
-    from app.domain.scraper_control import ask_to_stop  # type: ignore
-except ImportError:
-    def ask_to_stop(job_id: str) -> bool:
+    from app.application.scraper_control import ask_to_stop, push_result  # type: ignore
+except Exception:
+    try:
+        from scraper_control import ask_to_stop, push_result  # type: ignore
+    except Exception:
+        def ask_to_stop(job_id: str) -> bool:
+            return False
+        def push_result(job_id: str, item: dict) -> None:
+            pass
+
+import re
+from urllib.parse import urlparse, unquote
+
+BAD_TITLE = re.compile(r"(?:^|\b)(descripci[oó]n del puesto|publicado|actualizado)\b", re.I)
+
+def _slug_title_from_url(url: str) -> str:
+    """Deriva un título legible a partir del slug de la URL de detalle."""
+    try:
+        path = urlparse(url).path.rstrip("/")
+        last = path.split("/")[-1] if path else ""
+        if not last:
+            return ""
+        last = last.split("?")[0].split("#")[0]
+        last = re.sub(r"\.html?$", "", last, flags=re.I)    # quita .html
+        last = re.sub(r"-\d+$", "", last)                  # quita -<id>
+        title = unquote(last).replace("-", " ")
+        title = re.sub(r"\s+", " ", title).strip()
+        return title
+    except Exception:
+        return ""
+
+def _is_reasonable_title(s: str) -> bool:
+    s = (s or "").strip()
+    if not s or BAD_TITLE.search(s):
         return False
+    if not re.search(r"[A-Za-zÁÉÍÓÚÑáéíóúñ]", s):
+        return False
+    return 3 <= len(s) <= 140
 
+def _pick_title(texts: list[str]) -> str:
+    seen, cleaned = set(), []
+    for t in (t.strip() for t in texts if t):
+        t = re.sub(r"\s+", " ", t)
+        if t and t not in seen:
+            seen.add(t)
+            cleaned.append(t)
+    for t in cleaned:
+        if _is_reasonable_title(t):
+            return t
+    return max(cleaned, key=len, default="")
+
+def _extract_title(dp: Page, url: str, detail_container: str = "#section-detalle") -> str:
+    """Intenta varias estrategias para obtener el título; último recurso: URL."""
+    selectors = [
+        f"{detail_container} h1",
+        f"{detail_container} h2",
+        "main h1, article h1, header h1, h1",
+        "main h2, article h2, header h2, h2",
+    ]
+    for sel in selectors:
+        try:
+            loc = dp.locator(sel)
+            if not loc.count():
+                continue
+            try:
+                texts = loc.all_inner_texts()
+            except Exception:
+                texts = []
+            if not texts:
+                try:
+                    texts = dp.eval_on_selector_all(
+                        sel, "els => els.map(e => (e.textContent || '').trim()).filter(Boolean)"
+                    )
+                except Exception:
+                    texts = []
+            chosen = _pick_title(texts)
+            if chosen:
+                return chosen
+        except Exception:
+            continue
+    return _slug_title_from_url(url)
+# ──────────────────────────────────────────────────────────────────────────────
+# Constantes / Selectores
+# ──────────────────────────────────────────────────────────────────────────────
 BASE_URL = "https://www.zonajobs.com.ar/"
-LISTING_SELECTOR = "div#listado-avisos a.sc-ddcOto"
-DETAIL_CONTAINER = "#section-detalle"
-TIMEOUT = 30_000
-NEXT_BTN_SELECTOR = "a.sc-dzVpKk.hFOZsP:not([disabled])"
 
-def slugify(text: str) -> str:
+# En listados hemos visto anclas con clases utilitarias tipo .sc-....;
+# además, los href de detalle tienen el patrón /empleos/<slug>-<id>.html
+LISTING_SCOPE = "#listado-avisos"
+LISTING_ANCHORS = f"{LISTING_SCOPE} a[href*='/empleos/']"
+
+# Patrón URL de detalle (más estricto que un contains)
+DETAIL_URL_RE = re.compile(r"/empleos/[^/]+-\d+\.html$", re.IGNORECASE)
+
+# En detalle el portal suele renderizar un contenedor principal
+DETAIL_CONTAINER = "#section-detalle"
+
+# Paginación: botones y/o links con números; mantenemos 2 estrategias
+
+PAGER_CONTAINER = ".sc-kJdAmE"        # contenedor del paginador (ajústalo si difiere)
+PAGER_LINKS     = f"{PAGER_CONTAINER} a"
+NEXT_BTN_SELECTOR = "a[aria-label='Siguiente'], a[rel='next'], a.sc-dzVpKk.hFOZsP"
+
+# Timeout base (ms)
+TIMEOUT = 25_000
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Utilidades mínimas
+# ──────────────────────────────────────────────────────────────────────────────
+def _slugify(text: str) -> str:
     norm = unicodedata.normalize("NFKD", text)
     ascii_ = norm.encode("ascii", "ignore").decode("ascii")
     return re.sub(r"[^a-z0-9]+", "-", ascii_.lower()).strip("-")
 
+
+def _build_search_url(query: str, location: str, page: int = 1) -> str:
+    # ZonaJobs acepta estructuras tipo:
+    #   /empleos.html?recientes=true&palabra=<q>&zona=<loc>&page=<n>
+    # Donde ‘palabra’ y ‘zona’ suelen tolerar valores vacíos.
+    params = []
+    if query:
+        params.append(("palabra", query))
+    if location:
+        params.append(("zona", location))
+    params.append(("recientes", "true"))
+    params.append(("page", str(page)))
+    return ul.urljoin(BASE_URL, f"empleos.html?{ul.urlencode(params)}")
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Scraper
+# ──────────────────────────────────────────────────────────────────────────────
 class ZonaJobsScraper:
     def __init__(
         self,
@@ -37,246 +156,418 @@ class ZonaJobsScraper:
         job_id: Optional[str] = None,
     ) -> None:
         self.browser = browser
-        self.query = query.strip()
-        self.location = location.strip()
+        self.query = (query or "").strip()
+        self.location = (location or "").strip()
         self.max_pages = max_pages
         self.job_id = job_id or ""
-        self.context = browser.new_context(viewport=None,
-        user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36")
-        self.page = self.context.new_page()
 
-        self.filtered_base_url: Optional[str] = None
+        # Contexto de ventana completa + UA común para evitar variantes raras
+        self.context = browser.new_context(
+            viewport=None,
+            user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/122.0.0.0 Safari/537.36"
+            ),
+        )
+        self.page: Page = self.context.new_page()
+
         self.results: List[Dict[str, Any]] = []
-        
-    def _get_total_pages(self) -> int:
-        paginador = self.page.locator("div.sc-jrOYZv")
-        if not paginador.count():
-            return 1
-        paginas = paginador.locator("a.sc-fQfKYo.ddMBgL, a.sc-fQfKYo.cLGqfc")
-        nums = []
-        for el in paginas.all():
-            txt = el.inner_text().strip()
-            if txt.isdigit():
-                nums.append(int(txt))
-        return max(nums) if nums else 1
-        
+        self.base_url: Optional[str] = None
 
+        # Descartar cualquier diálogo
+        self.page.on("dialog", lambda d: d.dismiss())
+
+    # ── Flujo principal ───────────────────────────────────────────────────────
     def run(self) -> List[Dict[str, Any]]:
-        self._login()
+        self._open_listing()
         page_num = 1
-        total_pages = self._get_total_pages()
+        total_pages = self._get_total_pages_safe()
         get_logger().info("Total de páginas detectado: %s", total_pages)
-        limit_pages = min(self.max_pages if self.max_pages else total_pages, total_pages)
-        while page_num <= limit_pages:
-            get_logger().debug("Scrapeando página %s", page_num)
+
+        # respetar max_pages si lo pasan
+        if self.max_pages:
+            total_pages = min(total_pages, self.max_pages)
+
+        while page_num <= total_pages:
+            if self._should_stop():
+                break
+
+            get_logger().debug("Scrapeando página %s/%s", page_num, total_pages)
             hrefs = self._get_listing_hrefs(page_num)
 
-            # Si no hay avisos, reintentar una vez (por si fue loader/lentitud)
             if not hrefs:
-                get_logger().warning(
-                    "Página %s sin avisos, reintentando 1 vez...", page_num
-                )
-                self.page.reload()
-                self.page.wait_for_timeout(2000)  # Espera un poco por las dudas
+                # Reintento suave (pantallas con loaders)
+                self.page.reload(wait_until="domcontentloaded")
+                self.page.wait_for_timeout(1200)
                 hrefs = self._get_listing_hrefs(page_num)
-                if not hrefs:
-                    get_logger().info(
-                        "No hay avisos en la página %s, deteniendo.", page_num
-                    )
-                    break
 
             for url in hrefs:
-                if self.job_id and ask_to_stop(self.job_id):
+                if self._should_stop():
                     break
                 try:
-                    self.results.append(self._scrape_detail(url))
-                except Exception as e:
-                    get_logger().warning("Error scrapeando %s: %s", url, e)
-                    continue
+                    data = self._scrape_detail(url)
+                    if data:
+                        self.results.append(data)
+                        if self.job_id:
+                            push_result(self.job_id, data)
+                except Exception as exc:
+                    get_logger().warning("Detalle %s falló: %s", url, exc)
+
+            if self._should_stop():
+                break
 
             page_num += 1
+            if page_num <= total_pages:
+                if not self._go_to_page(page_num):
+                    # Si la paginación falla, intentamos construir URL directa
+                    fallback = _build_search_url(self.query, self.location, page=page_num)
+                    try:
+                        self.page.goto(fallback, timeout=TIMEOUT, wait_until="domcontentloaded")
+                    except PWTimeoutError:
+                        get_logger().warning("Timeout al ir a %s. Cortando.", fallback)
+                        break
 
         self.context.close()
         return self.results
 
-    def _login(self) -> None:
-        p = self.page
-        p.goto(BASE_URL, wait_until="domcontentloaded", timeout=TIMEOUT)
+    # ── Helpers de control ────────────────────────────────────────────────────
+    def _should_stop(self) -> bool:
+        return bool(self.job_id and ask_to_stop(self.job_id))
 
-        # Ancla multifunción: placeholder *o* botón «Buscar»
-        home_ready_sel = (
-            "div.select__placeholder:has-text('Buscar'), "
-            "input[id^='react-select'][type='text'], "
-            "button#buscarTrabajo, button[data-tag='searchBtn']"
-        )
-        # Aceptamos cookies si siguen ahí
-        if p.locator("button:has-text('Aceptar')").count():
-            p.click("button:has-text('Aceptar')")
+    def _close_cookie_banner(self) -> None:
+        # Intento genérico de cierre de cookies (varias variantes típicas)
+        for sel in [
+            "button#onetrust-accept-btn-handler",
+            "button:has-text('Aceptar todas')",
+            "button:has-text('Aceptar')",
+            "text=/Acepto|De acuerdo|OK/i",
+        ]:
+            try:
+                btn = self.page.locator(sel).first
+                if btn.count() and btn.is_visible():
+                    btn.click(timeout=1000)
+                    break
+            except Exception:
+                pass
 
+    # ── Arranque / listado ────────────────────────────────────────────────────
+    def _open_listing(self) -> None:
+        # Si pasan query o location usamos URL parametrizada; si no, recientes
         if self.query or self.location:
-            self._buscar_con_inputs()
+            url = _build_search_url(self.query, self.location, page=1)
         else:
-            # Feed general orden "recientes"
-            self.filtered_base_url = f"{BASE_URL}empleos.html?recientes=true"
-            p.goto(f"{self.filtered_base_url}&page=1",
-                wait_until="domcontentloaded", timeout=TIMEOUT)
+            url = ul.urljoin(BASE_URL, "empleos.html?recientes=true&page=1")
 
+        get_logger().debug("Abriendo listado: %s", url)
+        self.page.goto(url, timeout=TIMEOUT, wait_until="domcontentloaded")
+        self._close_cookie_banner()
 
-    def _buscar_con_inputs(self) -> None:
-        p = self.page
-        if self.query:
-            p.wait_for_selector("#react-select-6-input", timeout=TIMEOUT)
-            p.fill("#react-select-6-input", self.query)
-            p.wait_for_timeout(800)
-        if self.location:
-            ctl = "#lugar-de-trabajo .select__control:not(.select__control--is-disabled)"
-            p.wait_for_selector(ctl, timeout=TIMEOUT)
-            p.click(ctl)
-            p.wait_for_selector("#react-select-7-input", timeout=TIMEOUT)
-            p.fill("#react-select-7-input", self.location)
-            p.wait_for_timeout(400)
-            p.keyboard.press("Enter")
-        elif self.query:
-            p.click("#buscarTrabajo")
+        # Ancla robusta: contenedor de avisos o cualquier <a> con /empleos/
         try:
-            p.wait_for_load_state("networkidle", timeout=TIMEOUT * 2)
-        except TimeoutError:
-            get_logger().warning(
-                "La carga excedió el plazo de %s ms tras buscar", TIMEOUT * 2
+            self.page.wait_for_selector(
+                f"{LISTING_SCOPE}, {LISTING_ANCHORS}",
+                timeout=TIMEOUT,
+                state="attached",
             )
-        p.wait_for_selector("#listado-avisos", timeout=TIMEOUT)
-        avisos = p.locator(LISTING_SELECTOR)
-        n_avisos = avisos.count()
-        get_logger().debug("Avisos encontrados: %s", n_avisos)
-        if n_avisos == 0:
-            self.filtered_base_url = None
-            get_logger().info("No hay avisos en el listado, abortando búsqueda")
-            return
-        self.filtered_base_url = p.url
+        except PWTimeoutError:
+            # fallback: intentar de nuevo con recientes
+            fallback = ul.urljoin(BASE_URL, "empleos.html?recientes=true&page=1")
+            get_logger().warning("Fallback a %s", fallback)
+            self.page.goto(fallback, timeout=TIMEOUT, wait_until="domcontentloaded")
+            self.page.wait_for_selector(LISTING_ANCHORS, timeout=TIMEOUT)
 
-    def _click_next_page(self) -> bool:
-        # Busca el botón "siguiente" que NO está deshabilitado
-        next_btn = self.page.locator("a.sc-dzVpKk:not([disabled])").first
-        if next_btn.count():
-            next_btn.scroll_into_view_if_needed()
-            next_btn.click()
-            self.page.wait_for_load_state("networkidle", timeout=TIMEOUT)
-            return True
-        else:
-            get_logger().info("No hay más páginas (botón next está deshabilitado)")
-            return False
+        self.base_url = self.page.url
 
-    def _page_url(self, page: int) -> str:
-        if self.query or self.location:
-            loc = f"{slugify(self.location)}/" if self.location else ""
-            base = f"{BASE_URL}{loc}empleos.html"
-            params = [f"page={page}"]
-            if self.query:
-                params.insert(0, f"palabra={ul.quote_plus(self.query)}")
-            return f"{base}?{'&'.join(params)}"
-        return f"{BASE_URL}empleos.html?recientes=true&page={page}"
+    def _get_total_pages_safe(self) -> int:
+        try:
+            return self._get_total_pages()
+        except Exception:
+            return 1
 
+    def _get_total_pages(self) -> int:
+        # 1) Esperá que aparezca el paginador (si existe); si no, 1
+        try:
+            self.page.wait_for_selector(PAGER_CONTAINER, timeout=5_000, state="attached")
+        except Exception:
+            return 1
 
-    def _get_listing_hrefs(self, page: int) -> List[str]:
-        if self.job_id and ask_to_stop(self.job_id):
-            return []
-        # Cambio de página
-        if page > 1 and self.filtered_base_url:
-            if not self._click_next_page():
-                get_logger().info("Ya no hay más páginas tras la %s", page - 1)
-                return []
-        elif page > 1:
-            self.page.goto(self._page_url(page), timeout=TIMEOUT)
-            self.page.wait_for_selector("#listado-avisos", timeout=TIMEOUT)
+        pager = self.page.locator(PAGER_CONTAINER)
+        if not pager.count():
+            return 1
 
-        # Esperar avisos REALES (no solo el contenedor) - hasta 10s, en 0.5s steps
-        max_wait = 10
-        waited = 0
-        urls = []
-        while waited < max_wait:
-            avisos = self.page.locator("div#listado-avisos a[href*='/empleos/']")
-            urls = avisos.evaluate_all("els => [...new Set(els.map(e => e.href))]")
-            urls = [u for u in urls if re.search(r"/empleos/[^.]+-\d+\.html$", u)]
-            if urls:
-                break
+        nums = []
 
-            # Además, verificar si sigue el spinner/Buscando ofertas
-            loading = self.page.locator("h1").first.inner_text().lower()
-            if "buscando ofertas" in loading:
+        # 2) Recorre TODOS los <a> del paginador
+        for a in self.page.locator(PAGER_LINKS).all():
+            try:
+                # a) número visible (por si viene en <span> dentro del <a>)
+                txt = (a.inner_text() or "").strip()
+                # puede venir "1", "2", "Siguiente", etc.
+                for m in re.findall(r"\b\d+\b", txt):
+                    nums.append(int(m))
+
+                # b) número en el href (?page=74, &page=3, etc.)
+                href = a.get_attribute("href") or ""
+                m = re.search(r"[?&]page=(\d+)\b", href)
+                if m:
+                    nums.append(int(m.group(1)))
+            except Exception:
+                continue
+
+        # 3) Filtra basura: ignorá anchors deshabilitados con href="#"
+        nums = [n for n in nums if n > 0]
+
+        return max(nums) if nums else 1
+
+    # ── Scrape de listado ─────────────────────────────────────────────────────
+    def _get_listing_hrefs(self, page_index: int) -> List[str]:
+        """Devuelve URLs únicas de detalle confiables para la página actual."""
+        # Esperar algo de contenido en el listado
+        try:
+            self.page.wait_for_selector(LISTING_ANCHORS, timeout=8_000)
+        except PWTimeoutError:
+            # Puede estar cargando; intentamos un ciclo corto de espera incremental
+            waited = 0.0
+            urls: List[str] = []
+            while waited < 6.0:
+                anchors = self.page.locator(LISTING_ANCHORS)
+                if anchors.count():
+                    urls = anchors.evaluate_all("els => Array.from(new Set(els.map(e => e.href)))")
+                    urls = [u for u in urls if DETAIL_URL_RE.search(u or "")]
+                    if urls:
+                        break
                 time.sleep(0.5)
                 waited += 0.5
-            else:
-                # Si el loading desapareció pero no hay avisos, salir igual
-                break
+            return sorted(urls)
 
-        get_logger().debug(
-            "Avisos REALES encontrados en página %s: %s", page, len(urls)
-        )
-
-        if not urls:
-            html_debug = self.page.inner_html("#listado-avisos")
-            get_logger().debug(
-                "HTML en página %s (primeros 1000):\n%s", page, html_debug[:1000]
-            )
-            avisos_alt = self.page.locator("#listado-avisos a")
-            urls_alt = avisos_alt.evaluate_all("els => [...new Set(els.map(e => e.href))]")
-            urls_alt = [u for u in urls_alt if re.search(r"/empleos/[^.]+-\d+\.html$", u)]
-            get_logger().debug(
-                "Selector alternativo encontró: %s avisos reales", len(urls_alt)
-            )
-            if urls_alt:
-                return sorted(urls_alt)
-            return []
+        anchors = self.page.locator(LISTING_ANCHORS)
+        raw = anchors.evaluate_all("els => Array.from(new Set(els.map(e => e.href)))")
+        urls = [u for u in raw if u and DETAIL_URL_RE.search(u)]
         return sorted(urls)
 
-
     def _scrape_detail(self, url: str) -> Dict[str, Any]:
-        if self.job_id and ask_to_stop(self.job_id):
-            raise Exception("Parado por usuario")
-        page_detail = self.context.new_page()
-        page_detail.goto(url, timeout=TIMEOUT)
-        page_detail.wait_for_selector(DETAIL_CONTAINER, timeout=TIMEOUT)
+        """Scrapea un aviso de ZonaJobs (detalle)."""
         data: Dict[str, Any] = {"url": url}
-        data["titulo"] = page_detail.locator(
-            f"h1, {DETAIL_CONTAINER} h1, {DETAIL_CONTAINER} h2"
-        ).first.inner_text().strip()
-        comp = page_detail.locator("text=Confidencial").first
-        if comp.count():
-            data["empresa"] = comp.inner_text().strip()
-        else:
-            comp_div = page_detail.locator("div.sc-kZuyWR").first
-            if comp_div.count():
-                data["empresa"] = comp_div.inner_text().strip()
+
+        # Validación rápida de URL de detalle
+        if not DETAIL_URL_RE.search(url):
+            data["error"] = "url_no_parece_detalle"
+            return data
+
+        # Stop cooperativo
+        try:
+            if hasattr(self, "_should_stop") and self._should_stop():
+                raise RuntimeError("Scraping detenido por usuario")
+            if self.job_id and ask_to_stop(self.job_id):
+                raise RuntimeError("Scraping detenido por usuario")
+        except Exception as e:
+            data["error"] = str(e)
+            return data
+
+        dp = self.context.new_page()
+        try:
+            # Carga inicial
+            dp.goto(url, timeout=TIMEOUT, wait_until="domcontentloaded")
+
+            # Espera robusta: contenedor o al menos un h1/h2 visible
+            try:
+                dp.wait_for_selector(DETAIL_CONTAINER, timeout=TIMEOUT, state="attached")
+            except PWTimeoutError:
+                # Fallback a cabecera mínima
+                dp.wait_for_selector("h1, h2", timeout=TIMEOUT, state="visible")
+
+            # Espera a que haya al menos un H1 visible en la página
+            try:
+                dp.wait_for_selector("h1", timeout=12_000, state="visible")
+            except PWTimeoutError:
+                # Fallback a role (por si el sitio arma el H1 de otra forma)
+                try:
+                    dp.get_by_role("heading", level=1).first.wait_for(state="visible", timeout=6_000)
+                except PWTimeoutError:
+                    pass
+
+            # Selector robusto: primero H1 visible; si no, role heading nivel 1; último recurso, cualquier H1
+            title_loc = (
+                dp.locator("h1:visible").first
+                if dp.locator("h1:visible").count()
+                else dp.get_by_role("heading", level=1).first
+                if dp.get_by_role("heading", level=1).count()
+                else dp.locator("h1").first
+            )
+
+            titulo_txt = ""
+            if title_loc and title_loc.count():
+                # text_content es menos propenso a forzar layout que inner_text y suele alcanzar
+                titulo_txt = (title_loc.text_content() or "").strip()
+
+            data["titulo"] = titulo_txt or _slug_title_from_url(url)
+            
+            try:
+                org_name = dp.evaluate("""
+                    () => {
+                    const blocks = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+                    for (const b of blocks) {
+                        try {
+                        const j = JSON.parse(b.textContent || '{}');
+                        const n = j?.hiringOrganization?.name || j?.organization?.name || j?.publisher?.name;
+                        if (n && typeof n === 'string') return n.trim();
+                        } catch(e) {}
+                    }
+                    return null;
+                    }
+                """)
+            except Exception:
+                org_name = None
+
+            # 2) Intento por selectores relajados (sin forzar #section-detalle ni .sc-doIlLK)
+            empresa_txt = None
+            candidatos = [
+                "a[href*='/perfiles/empresa']",
+                ".sc-gDrLyk",                    # tu clase actual (por si sirve)
+                "[data-testid*='company']",
+                "header .company, .company-name"
+            ]
+
+            for sel in candidatos:
+                try:
+                    # Esperá visibilidad breve por cada candidato
+                    loc = dp.locator(f"{sel}").first
+                    if loc.count():
+                        loc.wait_for(state="visible", timeout=3000)
+                        t = (loc.inner_text() or "").strip()
+                        # filtrá valores basura comunes
+                        if t and t.lower() not in {"", "ver más", "postularme"}:
+                            empresa_txt = t
+                            break
+                except Exception:
+                    continue
+
+            # 3) Fallback de texto 'Confidencial'
+            if not empresa_txt:
+                try:
+                    loc_conf = dp.get_by_text(re.compile(r"\bConfidencial\b", re.I)).first
+                    if loc_conf.count():
+                        empresa_txt = (loc_conf.inner_text() or "").strip()
+                except Exception:
+                    pass
+
+            data["empresa"] = org_name or empresa_txt or ""
+
+            # ===== PUBLICADO / ACTUALIZADO ====================================
+            pub_loc = dp.locator("#section-detalle *").filter(
+                has_text=re.compile(r"(Publicado|Actualizado)", re.I)
+            ).last
+            txt_pub = pub_loc.inner_text().strip() if pub_loc.count() else ""
+            data["publicado"] = txt_pub
+            data["fecha_publicacion"] = parse_fecha_publicacion(txt_pub)
+
+            # ===== UBICACIÓN ===================================================
+            # Dentro del link de ubicación suele haber un h2 con "Ciudad, Provincia"
+            ubi_loc = dp.locator(
+                "#section-detalle a[href*='/empleos'] h2, "
+                "#section-detalle a[href*='/en-'] h2, "
+                "#section-detalle i[name='icon-light-location-pin'] ~ * h2"
+            ).first
+            data["ubicacion"] = ubi_loc.inner_text().strip() if ubi_loc.count() else ""
+
+            # ===== DESCRIPCIÓN =================================================
+            # Párrafos reales del cuerpo; evitar encabezados/títulos
+            p_nodes = dp.locator(
+                "#section-detalle .sc-boLwTQ p, "           # bloque que mostraste
+                "#section-detalle p.sc-boLwTQ p, "          # variante anidada
+                "#section-detalle .sc-bGXeph ~ p, "         # p después del h3 "Descripción del puesto"
+                "#section-detalle article p, "
+                "#section-detalle main p"
+            )
+
+            parrafos: List[str] = []
+            for el in p_nodes.all():
+                try:
+                    t = el.inner_text().strip()
+                    if not t:
+                        continue
+                    # filtrar rótulos que no son contenido
+                    if re.fullmatch(r"(Descripción del puesto|Postulación rápida)\s*", t, re.I):
+                        continue
+                    parrafos.append(t)
+                except Exception:
+                    continue
+
+            # de-dup manteniendo orden
+            seen: set[str] = set()
+            limpio: List[str] = []
+            for t in parrafos:
+                if t not in seen:
+                    seen.add(t)
+                    limpio.append(t)
+
+            data["descripcion"] = "\n\n".join(limpio)
+
+            # ===== BENEFICIOS (si aparecen como <ul><li>) ======================
+            try:
+                # Párrafos dentro de los <li> del ul con chips
+                chip_ps = dp.locator(f"{DETAIL_CONTAINER} ul.sc-didJYH li p")
+                texts = [t.strip() for t in chip_ps.all_inner_texts() if t and t.strip()]
+
+                # Si querés incluir también el texto de los <a> (por si alguna variante no usa <p>)
+                if not texts:
+                    chip_links = dp.locator(f"{DETAIL_CONTAINER} ul.sc-didJYH li a")
+                    texts = [t.strip() for t in chip_links.all_inner_texts() if t and t.strip()]
+
+                data["beneficios"] = texts
+            except Exception:
+                data["beneficios"] = []
+
+            # ===== TAGS (enlaces temáticos / chips) ============================
+            try:
+                tags_txt = dp.locator(
+                    "#section-detalle a[href*='/empleos-'], "
+                    "#section-detalle a[href*='/empleos/'], "
+                    "#section-detalle a[href*='/en-']"
+                ).all_inner_texts()
+                data["tags"] = sorted({t.strip() for t in tags_txt if t and t.strip()})
+            except Exception:
+                data["tags"] = []
+
+            # Campos no siempre presentes en ZJ, dejamos vacíos si no se detectan
+
+            return data
+
+        except PWTimeoutError:
+            data["error"] = "timeout_detalle"
+            return data
+        finally:
+            try:
+                dp.close()
+            except Exception:
+                pass
+    # ── Paginación ────────────────────────────────────────────────────────────
+    def _go_to_page(self, page_number: int) -> bool:
+        """Intenta navegar a la página N usando el propio paginador; si no hay, devuelve False."""
+        try:
+            # 1) Intento click en botón/liga 'Siguiente' si el número siguiente es consecutivo.
+            #    Si no, intentamos click directo en el número de página.
+            pager = self.page.locator(PAGER_CONTAINER)
+            if not pager.count():
+                return False
+
+            # Click directo al número de página
+            num_link = self.page.locator(
+                f"{PAGER_LINKS}:has-text('{page_number}')"
+            ).first
+            if num_link.count() and num_link.is_enabled():
+                num_link.click()
             else:
-                comp_link = page_detail.locator("a[href*='/perfiles/empresa']").first
-                data["empresa"] = comp_link.inner_text().strip() if comp_link.count() else ""
-        pub = page_detail.locator(
-            f"{DETAIL_CONTAINER} h2:has-text('Publicado'),"
-            f"{DETAIL_CONTAINER} h2:has-text('Actualizado')"
-        ).first
-        texto_pub = pub.inner_text().strip() if pub.count() else ""
-        data["publicado"] = texto_pub
-        data["fecha_publicacion"] = parse_fecha_publicacion(texto_pub)
-        desc_nodes = page_detail.locator(f"{DETAIL_CONTAINER} p").all()
-        data["descripcion"] = "\n\n".join(
-            n.inner_text().strip() for n in desc_nodes if n.inner_text().strip()
-        )
-        def grab(sel: str) -> str:
-            elem = page_detail.locator(sel).first
-            return elem.inner_text().strip() if elem.count() else ""
-        data["industria"] = grab("p:has-text('Industria') + p")
-        data["ubicacion"] = grab("p:has-text('Ubicación') + p")
-        data["tamano_empresa"] = grab("p:has-text('Tamaño de la empresa') + span")
-        data["modalidad"] = grab(f"{DETAIL_CONTAINER} li a[href*='modalidad-'] p")
-        data["beneficios"] = [
-            b.inner_text().strip()
-            for b in page_detail.locator(f"{DETAIL_CONTAINER} ul li").all()
-            if b.inner_text().strip()
-        ]
-        data["tags"] = sorted({
-            t.inner_text().strip()
-            for t in page_detail.locator(f"{DETAIL_CONTAINER} li p").all()
-            if t.inner_text().strip()
-        })
-        page_detail.close()
-        return data
+                # fallback: Siguiente
+                next_btn = self.page.locator(NEXT_BTN_SELECTOR).first
+                if next_btn.count() and next_btn.is_enabled():
+                    next_btn.click()
+                else:
+                    return False
+
+            # Espera a que cambie el contenido del listado
+            self.page.wait_for_selector(LISTING_ANCHORS, timeout=TIMEOUT)
+            return True
+        except PWTimeoutError:
+            return False
