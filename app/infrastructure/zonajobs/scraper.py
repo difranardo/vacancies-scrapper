@@ -1,6 +1,5 @@
 from __future__ import annotations
 import re
-import json
 import time
 import unicodedata
 import urllib.parse as ul
