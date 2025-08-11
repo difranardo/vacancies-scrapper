@@ -1,18 +1,19 @@
 from __future__ import annotations
+
 import re
-import json
 import time
 import unicodedata
 import urllib.parse as ul
 from typing import Any, Dict, List, Optional
+from urllib.parse import urlparse, unquote
 
 from playwright.sync_api import Browser, Page, TimeoutError as PWTimeoutError, Error as PWError
 
 from app.infrastructure.utils import parse_fecha_publicacion
 from app.infrastructure.common.logging_utils import get_logger
-from app.scraper.application.scraper_control import ask_to_stop, push_result
 
 try:
+
     from app.application.scraper_control import ask_to_stop, push_result  # type: ignore
 except ModuleNotFoundError:
     try:
@@ -24,6 +25,7 @@ except ModuleNotFoundError:
             pass
 
 from urllib.parse import urlparse, unquote
+
 
 BAD_TITLE = re.compile(r"(?:^|\b)(descripci[oó]n del puesto|publicado|actualizado)\b", re.I)
 
