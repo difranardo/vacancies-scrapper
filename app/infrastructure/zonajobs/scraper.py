@@ -6,7 +6,7 @@ import unicodedata
 import urllib.parse as ul
 from typing import Any, Dict, List, Optional
 
-from playwright.sync_api import Browser, Page, TimeoutError as PWTimeoutError
+from playwright.sync_api import Browser, Page, TimeoutError as PWTimeoutError, Error as PWError
 
 from app.infrastructure.utils import parse_fecha_publicacion
 from app.infrastructure.common.logging_utils import get_logger
@@ -14,16 +14,15 @@ from app.scraper.application.scraper_control import ask_to_stop, push_result
 
 try:
     from app.application.scraper_control import ask_to_stop, push_result  # type: ignore
-except Exception:
+except ModuleNotFoundError:
     try:
         from scraper_control import ask_to_stop, push_result  # type: ignore
-    except Exception:
+    except ModuleNotFoundError:
         def ask_to_stop(job_id: str) -> bool:
             return False
         def push_result(job_id: str, item: dict) -> None:
             pass
 
-import re
 from urllib.parse import urlparse, unquote
 
 BAD_TITLE = re.compile(r"(?:^|\b)(descripci[oó]n del puesto|publicado|actualizado)\b", re.I)
@@ -41,7 +40,7 @@ def _slug_title_from_url(url: str) -> str:
         title = unquote(last).replace("-", " ")
         title = re.sub(r"\s+", " ", title).strip()
         return title
-    except Exception:
+    except ValueError:
         return ""
 
 def _is_reasonable_title(s: str) -> bool:
@@ -79,19 +78,19 @@ def _extract_title(dp: Page, url: str, detail_container: str = "#section-detalle
                 continue
             try:
                 texts = loc.all_inner_texts()
-            except Exception:
+            except PWError:
                 texts = []
             if not texts:
                 try:
                     texts = dp.eval_on_selector_all(
                         sel, "els => els.map(e => (e.textContent || '').trim()).filter(Boolean)"
                     )
-                except Exception:
+                except PWError:
                     texts = []
             chosen = _pick_title(texts)
             if chosen:
                 return chosen
-        except Exception:
+        except PWError:
             continue
     return _slug_title_from_url(url)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -180,6 +179,7 @@ class ZonaJobsScraper:
 
     # ── Flujo principal ───────────────────────────────────────────────────────
     def run(self) -> List[Dict[str, Any]]:
+        """Itera sobre el listado de avisos y acumula los datos extraídos."""
         self._open_listing()
         page_num = 1
         total_pages = self._get_total_pages_safe()
@@ -211,7 +211,7 @@ class ZonaJobsScraper:
                         self.results.append(data)
                         if self.job_id:
                             push_result(self.job_id, data)
-                except Exception as exc:
+                except (PWError, RuntimeError, ValueError) as exc:
                     get_logger().warning("Detalle %s falló: %s", url, exc)
 
             if self._should_stop():
@@ -248,7 +248,7 @@ class ZonaJobsScraper:
                 if btn.count() and btn.is_visible():
                     btn.click(timeout=1000)
                     break
-            except Exception:
+            except PWError:
                 pass
 
     # ── Arranque / listado ────────────────────────────────────────────────────
@@ -282,14 +282,14 @@ class ZonaJobsScraper:
     def _get_total_pages_safe(self) -> int:
         try:
             return self._get_total_pages()
-        except Exception:
+        except PWError:
             return 1
 
     def _get_total_pages(self) -> int:
         # 1) Esperá que aparezca el paginador (si existe); si no, 1
         try:
             self.page.wait_for_selector(PAGER_CONTAINER, timeout=5_000, state="attached")
-        except Exception:
+        except PWError:
             return 1
 
         pager = self.page.locator(PAGER_CONTAINER)
@@ -312,7 +312,7 @@ class ZonaJobsScraper:
                 m = re.search(r"[?&]page=(\d+)\b", href)
                 if m:
                     nums.append(int(m.group(1)))
-            except Exception:
+            except PWError:
                 continue
 
         # 3) Filtra basura: ignorá anchors deshabilitados con href="#"
@@ -346,6 +346,138 @@ class ZonaJobsScraper:
         urls = [u for u in raw if u and DETAIL_URL_RE.search(u)]
         return sorted(urls)
 
+    # ── Helpers de detalle ────────────────────────────────────────────────────
+    def _parse_company(self, dp: Page) -> str:
+        """Obtiene el nombre de la empresa si está disponible."""
+        try:
+            org_name = dp.evaluate(
+                """
+                    () => {
+                    const blocks = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+                    for (const b of blocks) {
+                        try {
+                        const j = JSON.parse(b.textContent || '{}');
+                        const n = j?.hiringOrganization?.name || j?.organization?.name || j?.publisher?.name;
+                        if (n && typeof n === 'string') return n.trim();
+                        } catch(e) {}
+                    }
+                    return null;
+                    }
+                """
+            )
+        except PWError:
+            org_name = None
+
+        empresa_txt = None
+        candidatos = [
+            "a[href*='/perfiles/empresa']",
+            ".sc-gDrLyk",
+            "[data-testid*='company']",
+            "header .company, .company-name",
+        ]
+        for sel in candidatos:
+            try:
+                loc = dp.locator(sel).first
+                if loc.count():
+                    loc.wait_for(state="visible", timeout=3000)
+                    t = (loc.inner_text() or "").strip()
+                    if t and t.lower() not in {"", "ver más", "postularme"}:
+                        empresa_txt = t
+                        break
+            except (PWError, PWTimeoutError):
+                continue
+
+        if not empresa_txt:
+            try:
+                loc_conf = dp.get_by_text(re.compile(r"\bConfidencial\b", re.I)).first
+                if loc_conf.count():
+                    empresa_txt = (loc_conf.inner_text() or "").strip()
+            except PWError:
+                pass
+
+        return org_name or empresa_txt or ""
+
+    def _parse_publication_date(self, dp: Page) -> tuple[str, Optional[str]]:
+        """Extrae el texto de publicación y su fecha parseada."""
+        pub_loc = dp.locator("#section-detalle *").filter(
+            has_text=re.compile(r"(Publicado|Actualizado)", re.I)
+        ).last
+        txt_pub = ""
+        if pub_loc.count():
+            try:
+                txt_pub = pub_loc.inner_text().strip()
+            except PWError:
+                pass
+        return txt_pub, parse_fecha_publicacion(txt_pub)
+
+    def _parse_location(self, dp: Page) -> str:
+        """Obtiene la ubicación del aviso."""
+        ubi_loc = dp.locator(
+            "#section-detalle a[href*='/empleos'] h2, "
+            "#section-detalle a[href*='/en-'] h2, "
+            "#section-detalle i[name='icon-light-location-pin'] ~ * h2",
+        ).first
+        if not ubi_loc.count():
+            return ""
+        try:
+            return ubi_loc.inner_text().strip()
+        except PWError:
+            return ""
+
+    def _parse_description(self, dp: Page) -> str:
+        """Compila los párrafos de la descripción del puesto."""
+        p_nodes = dp.locator(
+            "#section-detalle .sc-boLwTQ p, "
+            "#section-detalle p.sc-boLwTQ p, "
+            "#section-detalle .sc-bGXeph ~ p, "
+            "#section-detalle article p, "
+            "#section-detalle main p",
+        )
+
+        parrafos: List[str] = []
+        for el in p_nodes.all():
+            try:
+                t = el.inner_text().strip()
+                if not t:
+                    continue
+                if re.fullmatch(r"(Descripción del puesto|Postulación rápida)\s*", t, re.I):
+                    continue
+                parrafos.append(t)
+            except PWError:
+                continue
+
+        seen: set[str] = set()
+        limpio: List[str] = []
+        for t in parrafos:
+            if t not in seen:
+                seen.add(t)
+                limpio.append(t)
+        return "\n\n".join(limpio)
+
+    def _parse_benefits(self, dp: Page) -> List[str]:
+        """Obtiene la lista de beneficios si está presente."""
+        try:
+            chip_ps = dp.locator(f"{DETAIL_CONTAINER} ul.sc-didJYH li p")
+            texts = [t.strip() for t in chip_ps.all_inner_texts() if t and t.strip()]
+            if not texts:
+                chip_links = dp.locator(f"{DETAIL_CONTAINER} ul.sc-didJYH li a")
+                texts = [t.strip() for t in chip_links.all_inner_texts() if t and t.strip()]
+            return texts
+        except PWError:
+            return []
+
+    def _parse_tags(self, dp: Page) -> List[str]:
+        """Recupera los tags asociados al aviso."""
+        try:
+            tags_txt = dp.locator(
+                "#section-detalle a[href*='/empleos-'], "
+                "#section-detalle a[href*='/empleos/'], "
+                "#section-detalle a[href*='/en-']",
+            ).all_inner_texts()
+            return sorted({t.strip() for t in tags_txt if t and t.strip()})
+        except PWError:
+            return []
+
     def _scrape_detail(self, url: str) -> Dict[str, Any]:
         """Scrapea un aviso de ZonaJobs (detalle)."""
         data: Dict[str, Any] = {"url": url}
@@ -361,7 +493,7 @@ class ZonaJobsScraper:
                 raise RuntimeError("Scraping detenido por usuario")
             if self.job_id and ask_to_stop(self.job_id):
                 raise RuntimeError("Scraping detenido por usuario")
-        except Exception as e:
+        except RuntimeError as e:
             data["error"] = str(e)
             return data
 
@@ -402,135 +534,15 @@ class ZonaJobsScraper:
                 titulo_txt = (title_loc.text_content() or "").strip()
 
             data["titulo"] = titulo_txt or _slug_title_from_url(url)
-            
-            try:
-                org_name = dp.evaluate("""
-                    () => {
-                    const blocks = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
-                    for (const b of blocks) {
-                        try {
-                        const j = JSON.parse(b.textContent || '{}');
-                        const n = j?.hiringOrganization?.name || j?.organization?.name || j?.publisher?.name;
-                        if (n && typeof n === 'string') return n.trim();
-                        } catch(e) {}
-                    }
-                    return null;
-                    }
-                """)
-            except Exception:
-                org_name = None
 
-            # 2) Intento por selectores relajados (sin forzar #section-detalle ni .sc-doIlLK)
-            empresa_txt = None
-            candidatos = [
-                "a[href*='/perfiles/empresa']",
-                ".sc-gDrLyk",                    # tu clase actual (por si sirve)
-                "[data-testid*='company']",
-                "header .company, .company-name"
-            ]
-
-            for sel in candidatos:
-                try:
-                    # Esperá visibilidad breve por cada candidato
-                    loc = dp.locator(f"{sel}").first
-                    if loc.count():
-                        loc.wait_for(state="visible", timeout=3000)
-                        t = (loc.inner_text() or "").strip()
-                        # filtrá valores basura comunes
-                        if t and t.lower() not in {"", "ver más", "postularme"}:
-                            empresa_txt = t
-                            break
-                except Exception:
-                    continue
-
-            # 3) Fallback de texto 'Confidencial'
-            if not empresa_txt:
-                try:
-                    loc_conf = dp.get_by_text(re.compile(r"\bConfidencial\b", re.I)).first
-                    if loc_conf.count():
-                        empresa_txt = (loc_conf.inner_text() or "").strip()
-                except Exception:
-                    pass
-
-            data["empresa"] = org_name or empresa_txt or ""
-
-            # ===== PUBLICADO / ACTUALIZADO ====================================
-            pub_loc = dp.locator("#section-detalle *").filter(
-                has_text=re.compile(r"(Publicado|Actualizado)", re.I)
-            ).last
-            txt_pub = pub_loc.inner_text().strip() if pub_loc.count() else ""
-            data["publicado"] = txt_pub
-            data["fecha_publicacion"] = parse_fecha_publicacion(txt_pub)
-
-            # ===== UBICACIÓN ===================================================
-            # Dentro del link de ubicación suele haber un h2 con "Ciudad, Provincia"
-            ubi_loc = dp.locator(
-                "#section-detalle a[href*='/empleos'] h2, "
-                "#section-detalle a[href*='/en-'] h2, "
-                "#section-detalle i[name='icon-light-location-pin'] ~ * h2"
-            ).first
-            data["ubicacion"] = ubi_loc.inner_text().strip() if ubi_loc.count() else ""
-
-            # ===== DESCRIPCIÓN =================================================
-            # Párrafos reales del cuerpo; evitar encabezados/títulos
-            p_nodes = dp.locator(
-                "#section-detalle .sc-boLwTQ p, "           # bloque que mostraste
-                "#section-detalle p.sc-boLwTQ p, "          # variante anidada
-                "#section-detalle .sc-bGXeph ~ p, "         # p después del h3 "Descripción del puesto"
-                "#section-detalle article p, "
-                "#section-detalle main p"
-            )
-
-            parrafos: List[str] = []
-            for el in p_nodes.all():
-                try:
-                    t = el.inner_text().strip()
-                    if not t:
-                        continue
-                    # filtrar rótulos que no son contenido
-                    if re.fullmatch(r"(Descripción del puesto|Postulación rápida)\s*", t, re.I):
-                        continue
-                    parrafos.append(t)
-                except Exception:
-                    continue
-
-            # de-dup manteniendo orden
-            seen: set[str] = set()
-            limpio: List[str] = []
-            for t in parrafos:
-                if t not in seen:
-                    seen.add(t)
-                    limpio.append(t)
-
-            data["descripcion"] = "\n\n".join(limpio)
-
-            # ===== BENEFICIOS (si aparecen como <ul><li>) ======================
-            try:
-                # Párrafos dentro de los <li> del ul con chips
-                chip_ps = dp.locator(f"{DETAIL_CONTAINER} ul.sc-didJYH li p")
-                texts = [t.strip() for t in chip_ps.all_inner_texts() if t and t.strip()]
-
-                # Si querés incluir también el texto de los <a> (por si alguna variante no usa <p>)
-                if not texts:
-                    chip_links = dp.locator(f"{DETAIL_CONTAINER} ul.sc-didJYH li a")
-                    texts = [t.strip() for t in chip_links.all_inner_texts() if t and t.strip()]
-
-                data["beneficios"] = texts
-            except Exception:
-                data["beneficios"] = []
-
-            # ===== TAGS (enlaces temáticos / chips) ============================
-            try:
-                tags_txt = dp.locator(
-                    "#section-detalle a[href*='/empleos-'], "
-                    "#section-detalle a[href*='/empleos/'], "
-                    "#section-detalle a[href*='/en-']"
-                ).all_inner_texts()
-                data["tags"] = sorted({t.strip() for t in tags_txt if t and t.strip()})
-            except Exception:
-                data["tags"] = []
-
-            # Campos no siempre presentes en ZJ, dejamos vacíos si no se detectan
+            data["empresa"] = self._parse_company(dp)
+            pub_txt, pub_date = self._parse_publication_date(dp)
+            data["publicado"] = pub_txt
+            data["fecha_publicacion"] = pub_date
+            data["ubicacion"] = self._parse_location(dp)
+            data["descripcion"] = self._parse_description(dp)
+            data["beneficios"] = self._parse_benefits(dp)
+            data["tags"] = self._parse_tags(dp)
 
             return data
 
@@ -540,7 +552,7 @@ class ZonaJobsScraper:
         finally:
             try:
                 dp.close()
-            except Exception:
+            except PWError:
                 pass
     # ── Paginación ────────────────────────────────────────────────────────────
     def _go_to_page(self, page_number: int) -> bool:
