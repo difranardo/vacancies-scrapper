@@ -19,48 +19,59 @@ def _worker_scrape(
     set_result: Callable,
     app: Flask,
 ):
+    """
+    Ejecuta un scraper en un hilo secundario dentro del contexto de la aplicación Flask.
+    """
+    # Inicia el contexto de la aplicación para todo el proceso del worker.
     with app.app_context():
         kwargs: dict[str, Any] = {"job_id": job_id}
         cargo = data.get("cargo", "").strip()
         ubic = data.get("ubicacion", "").strip()
 
-        if portal == "computrabajo":
-            kwargs["categoria"] = cargo
-            kwargs["lugar"] = ubic
-        elif portal in ("bumeran", "zonajobs", "mpar"):
-            if cargo:
-                kwargs["query"] = cargo
-            if ubic:
-                kwargs["location"] = ubic
+        # Mejora: Usar un diccionario de mapeo para los parámetros del portal.
+        # Es más limpio y fácil de extender que un if/elif.
+        portal_params_map = {
+            "computrabajo": {"categoria": cargo, "lugar": ubic},
+            "bumeran": {"query": cargo, "location": ubic},
+            "zonajobs": {"query": cargo, "location": ubic},
+            "mpar": {"query": cargo, "location": ubic},
+        }
+        
+        # Filtra claves con valores vacíos antes de actualizar kwargs.
+        params = {k: v for k, v in portal_params_map.get(portal, {}).items() if v}
+        kwargs.update(params)
 
+        # Manejo del número de páginas.
         max_pages = data.get("pages") or data.get("max_pages")
         if max_pages:
             try:
                 kwargs["max_pages"] = int(max_pages)
-            except Exception:
+            # Mejora: Captura excepciones más específicas.
+            except (ValueError, TypeError):
                 current_app.logger.warning(
-                    "Parametro de páginas inválido: %s", max_pages
+                    "Parámetro de páginas inválido: '%s'. Se ignorará.", max_pages
                 )
+        
+        # Manejo del parámetro headless.
+        headless = data.get("headless")
+        if headless is not None:
+            if isinstance(headless, str):
+                kwargs["headless"] = headless.lower() in ("1", "true", "yes", "y")
+            else:
+                kwargs["headless"] = bool(headless)
 
+        current_app.logger.debug("Iniciando scraper %s con parámetros: %s", portal, kwargs)
 
-    headless = data.get("headless")
-    if headless is not None:
-        if isinstance(headless, str):
-            kwargs["headless"] = headless.lower() in ("1", "true", "yes", "y")
-        else:
-            kwargs["headless"] = bool(headless)
-
-    app.logger.debug("Scraper %s – kwargs: %s", portal, kwargs)
-
-
-
+        res = []
         try:
+            # La función del scraper se ejecuta.
             res = func(**kwargs)
         except Exception as exc:
-            current_app.logger.exception("Scraper %s falló: %s", portal, exc)
-            res = []
+            # Si el scraper falla, se registra la excepción completa.
+            current_app.logger.exception("Scraper '%s' falló inesperadamente.", portal)
+        
+        # ¡Corrección principal! Llamar a set_result DENTRO del contexto.
         set_result(job_id, res)
-
 
 def _json_response(payload: list[dict[str, Any]], filename: str):
     buf = io.BytesIO(json.dumps(payload, ensure_ascii=False, indent=2).encode())

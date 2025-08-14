@@ -1,0 +1,4 @@
+GOOGLE_CLIENT_ID=1072834625302-um5lg24jimhlag7aroala3suebahfh6j.apps.googleusercontent.com
+GOOGLE_CLIENT_SECRET=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
+GOOGLE_REDIRECT_URI=http://localhost:5500/auth
+SECRET_KEY="super-secret-key"

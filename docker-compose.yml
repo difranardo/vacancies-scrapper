@@ -1,0 +1,34 @@
+# docker-compose.yml
+
+services:
+  vacancies-scrapper:
+    build: .
+    ports:
+      - "5500:5500"
+    environment:
+      SECRET_KEY: "${SECRET_KEY}"
+      # Para el intérprete de Python y librerías como urllib
+      PYTHONHTTPSVERIFY: "0"
+
+      # Para la librería 'requests'
+      REQUESTS_CA_BUNDLE: ""
+
+      # Para librerías OAuth
+      OAUTHLIB_INSECURE_TRANSPORT: "1"
+
+      IGNORE_HTTPS_ERRORS: "1"
+
+      # --- Tus otras variables ---
+      GOOGLE_CLIENT_ID: "${GOOGLE_CLIENT_ID}"
+      GOOGLE_CLIENT_SECRET: "${GOOGLE_CLIENT_SECRET}"
+      HEADLESS: "${HEADLESS:-True}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-L", "http://localhost:5000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+

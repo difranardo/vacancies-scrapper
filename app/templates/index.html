@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Vacancies Scraper · Randstad</title>
+
+  <style>
+    :root{
+      --brand-1:#0A66C2;         /* azul principal */
+      --brand-1-dark:#004182;    /* hover */
+      --brand-2:#22C1C3;         /* gradiente 1 */
+      --brand-3:#FDBB2D;         /* gradiente 2 */
+      --bg:#F5F7FB;              /* fondo app */
+      --card:#FFFFFF;            /* tarjeta */
+      --text:#1F2937;            /* gris oscuro */
+      --muted:#6B7280;           /* gris medio */
+      --line:#E5E7EB;            /* bordes sutiles */
+      --radius:14px;
+      --shadow:0 10px 30px rgba(2, 16, 40, .06);
+    }
+
+    /* Reset & base */
+    * { box-sizing:border-box; margin:0; padding:0; }
+    html, body { height:100%; }
+    body{
+      font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
+      color:var(--text);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, rgba(34,193,195,.18), transparent 55%),
+        radial-gradient(1200px 600px at 110% 10%, rgba(253,187,45,.14), transparent 55%),
+        var(--bg);
+      display:flex; flex-direction:column;
+    }
+    a { color:inherit; text-decoration:none; }
+
+    /* Header */
+    header{
+      position:sticky; top:0; z-index:10;
+      backdrop-filter:saturate(140%) blur(6px);
+      background:linear-gradient(90deg, rgba(10,102,194,.95), rgba(0,65,130,.95));
+      color:#fff;
+      border-bottom:1px solid rgba(255,255,255,.12);
+    }
+    .header-inner{
+      width:min(1080px,92%);
+      margin:0 auto; padding:14px 0;
+      display:flex; align-items:center; gap:12px;
+    }
+    .logo svg{width:28px;height:28px;fill:currentColor}
+    .logo span{font-weight:800; letter-spacing:.2px}
+
+    /* Main card */
+    .container{
+      width:min(980px,92%); margin:28px auto; flex:1;
+    }
+    .card{
+      background:var(--card); border-radius:var(--radius); box-shadow:var(--shadow); overflow:hidden;
+      border:1px solid var(--line);
+    }
+    .card-head{
+      padding:24px 26px;
+      background:linear-gradient(180deg, #fff, #fafbff);
+      border-bottom:1px solid var(--line);
+    }
+    /* Título bonito */
+    .title{
+      font-size:clamp(24px, 3.5vw, 34px);
+      font-weight:900;
+      letter-spacing:.3px;
+      line-height:1.15;
+      background:linear-gradient(90deg, var(--brand-1) 0%, #38bdf8 35%, #60a5fa 70%, #a78bfa 100%);
+      -webkit-background-clip:text; background-clip:text; color:transparent;
+      display:flex; align-items:center; gap:10px;
+    }
+    .title svg{width:32px;height:32px;flex:none;fill:currentColor;color:#60a5fa}
+
+    .card-body{ padding:22px 24px 8px; }
+
+    /* Form – auto-fit para mobile-first */
+    form{
+      display:grid; gap:18px 18px; align-items:end;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    }
+    label{display:block; font-size:12px; font-weight:800; color:#374151; margin:0 0 6px 2px; letter-spacing:.2px}
+    input, select{
+      width:100%; border:1px solid var(--line); border-radius:10px;
+      padding:12px 14px; font-size:15px; background:#fff; color:#0f172a;
+      transition:border-color .2s, box-shadow .2s, transform .02s;
+    }
+    input:focus, select:focus{
+      outline:none; border-color:var(--brand-1);
+      box-shadow:0 0 0 3px rgba(10,102,194,.16);
+    }
+    .actions{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+
+    .btn{
+      border:0; padding:12px 18px; border-radius:12px; font-weight:800; cursor:pointer;
+      background:var(--brand-1); color:#fff;
+      box-shadow:0 6px 20px rgba(10,102,194,.25);
+      transition:transform .06s ease, background .2s ease, box-shadow .2s ease;
+    }
+    .btn:hover:not([disabled]){ background:var(--brand-1-dark); box-shadow:0 8px 28px rgba(10,102,194,.35); }
+    .btn:active{ transform:translateY(1px); }
+    .btn[disabled]{ opacity:.6; cursor:not-allowed; box-shadow:none; }
+
+    .btn-outline{
+      background:#fff; color:var(--brand-1); border:2px solid var(--brand-1);
+      box-shadow:none;
+    }
+    .btn-outline:hover:not([disabled]){ background:var(--brand-1); color:#fff; }
+
+    /* Loading banner (inicia oculto) */
+    #loading{
+      display:none;
+      margin:18px 24px 24px; border-radius:12px;
+      padding:12px 14px; color:#05315b;
+      background:linear-gradient(90deg, rgba(34,193,195,.18), rgba(253,187,45,.18));
+      border:1px dashed rgba(10,102,194,.35);
+      align-items:center; gap:12px;
+    }
+    .spinner{width:18px;height:18px;border:3px solid rgba(5,49,91,.25);border-top-color:#05315b;border-radius:50%;animation:spin .8s linear infinite}
+    @keyframes spin{to{transform:rotate(360deg)}}
+    #btnCancel{ margin-left:auto; }
+
+    .muted{ color:var(--muted); font-size:13px; }
+
+    footer{
+      width:min(980px,92%); margin:24px auto 16px; padding:10px 0;
+      color:#5b6573; border-top:1px solid var(--line); text-align:center; font-size:13px;
+    }
+
+    @media (max-width:520px){
+      .container{ width:94%; }
+      .card-head, .card-body{ padding:18px; }
+      #loading{ margin:16px 18px 22px; }
+    }
+  </style>
+</head>
+<body>
+  <header role="banner" aria-label="Cabecera">
+    <div class="header-inner">
+      <div class="logo" aria-hidden="true" style="display:flex;align-items:center;gap:10px">
+        <svg viewBox="0 0 24 24"><path d="M8.8 2h6.4c.66 0 1.2.54 1.2 1.2v5.6c0 .66-.54 1.2-1.2 1.2h-2.4V22H10V10H7.6C6.94 10 6.4 9.46 6.4 8.8V3.2C6.4 2.54 6.94 2 7.6 2h1.2z"/></svg>
+        <span>Vacancies Scraper</span>
+      </div>
+    </div>
+  </header>
+
+  <main class="container" role="main">
+    <section class="card">
+      <div class="card-head">
+        <h1 class="title" aria-label="Vacancies Scraper">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 5h18v2H3V5zm2 5h14v2H5v-2zm-2 5h18v2H3v-2z"/></svg>
+          Vacancies Scraper
+        </h1>
+      </div>
+
+      <div class="card-body">
+        <form id="scrapeForm" autocomplete="off" novalidate>
+          <div>
+            <label for="keyword">Puesto *</label>
+            <input id="keyword" name="keyword" placeholder="QA, Python, Designer…" required />
+          </div>
+
+          <div>
+            <label for="location">Ubicación *</label>
+            <select id="location" name="location" required>
+            <option value="" disabled selected>Seleccionar provincia...</option>
+            <option value="Capital Federal">Capital Federal</option>
+            <option value="Gran Buenos Aires">Gran Buenos Aires (GBA)</option>
+            <option value="Buenos Aires">Buenos Aires</option>
+            <option value="Catamarca">Catamarca</option>
+            <option value="Chaco">Chaco</option>
+            <option value="Chubut">Chubut</option>
+            <option value="Córdoba">Córdoba</option>
+            <option value="Corrientes">Corrientes</option>
+            <option value="Entre Ríos">Entre Ríos</option>
+            <option value="Formosa">Formosa</option>
+            <option value="Jujuy">Jujuy</option>
+            <option value="La Pampa">La Pampa</option>
+            <option value="La Rioja">La Rioja</option>
+            <option value="Mendoza">Mendoza</option>
+            <option value="Misiones">Misiones</option>
+            <option value="Neuquén">Neuquén</option>
+            <option value="Río Negro">Río Negro</option>
+            <option value="Salta">Salta</option>
+            <option value="San Juan">San Juan</option>
+            <option value="San Luis">San Luis</option>
+            <option value="Santa Cruz">Santa Cruz</option>
+            <option value="Santa Fe">Santa Fe</option>
+            <option value="Santiago del Estero">Santiago del Estero</option>
+            <option value="Tierra del Fuego">Tierra del Fuego</option>
+            <option value="Tucumán">Tucumán</option>
+            </select>
+          </div>
+
+          <div>
+            <label for="pages">Páginas a scrapear</label>
+            <input id="pages" name="pages" type="number" min="1" step="1" placeholder="1 (todas)" value="1" />
+          </div>
+
+          <div>
+            <label for="portal">Portal</label>
+            <select id="portal" name="portal" aria-label="Portal">
+              <option value="bumeran">Bumeran</option>
+              <option value="zonajobs">ZonaJobs</option>
+              <option value="computrabajo">Computrabajo</option>
+            </select>
+          </div>
+
+          <div class="actions">
+            <button type="submit" class="btn" id="btnSubmit">Scrapear</button>
+            <span class="muted" aria-live="polite">Se descargará un Excel automáticamente. Podés cancelar para bajar lo obtenido hasta el momento.</span>
+          </div>
+        </form>
+
+        <!-- Loading -->
+        <div id="loading" role="status" aria-live="polite" aria-atomic="true">
+          <div class="spinner" aria-hidden="true"></div>
+          Procesando…
+          <button id="btnCancel" type="button" class="btn btn-outline">Cancelar</button>
+        </div>
+      </div>
+    </section>
+
+    <footer>
+      © 2025 Randstad Argentina — Todos los derechos reservados.
+    </footer>
+  </main>
+
+  <!-- JS: solo Excel; limpia inputs al finalizar/cancelar; HEAD para evitar .htm -->
+  <script>
+    // DOM
+    var form         = document.getElementById("scrapeForm");
+    var portalSel    = document.getElementById("portal");
+    var keywordInp   = document.getElementById("keyword");
+    var locationInp  = document.getElementById("location");
+    var pagesInp     = document.getElementById("pages");
+    var loadingDiv   = document.getElementById("loading");
+    var cancelBtn    = document.getElementById("btnCancel");
+
+    // Estado
+    var currentJobId = null;
+    var pollTimer = null;
+
+    // Helpers
+    function showFlex(el){ if(el){ el.style.display = "flex"; } }
+    function hide(el){ if(el){ el.style.display = "none"; } }
+    function enable(el, on){ if(el){ el.disabled = !on; } }
+    function toggleForm(enabled){
+      if (!form) return;
+      var elems = form.elements;
+      for (var i=0;i<elems.length;i++){ elems[i].disabled = !enabled; }
+    }
+    function clearInputs(){
+      if (keywordInp)  keywordInp.value  = "";
+      if (locationInp) locationInp.value = "";
+      if (pagesInp)    pagesInp.value    = "1";
+      if (keywordInp)  keywordInp.focus();
+    }
+    function resetUI(){
+  stopPolling();
+  hide(loadingDiv);
+  toggleForm(true);
+  clearInputs();
+  currentJobId = null;
+}
+
+// Siempre obligatorios
+if (keywordInp)  keywordInp.required  = true;
+if (locationInp) locationInp.required = true;
+
+// Descarga Excel con verificación HEAD
+function triggerExcelDownload(jobId){
+  var url = "/download/" + jobId + "?fmt=excel&keep=1";
+  fetch(url, { method:"HEAD", cache:"no-store" })
+    .then(function(h){
+      if (h.status === 200){
+        var a = document.createElement("a");
+        a.href = url;
+        a.download = jobId + ".xlsx";
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+      } else {
+        alert("El Excel todavía no está listo. Probá nuevamente en unos segundos.");
+      }
+    }).catch(function(){
+      alert("No se pudo verificar la descarga. Reintentá.");
+    });
+}
+
+// Poll hasta que el Excel exista
+function startPolling(jobId){
+  stopPolling();
+  pollTimer = setInterval(function(){
+    fetch("/download/" + jobId + "?fmt=excel", { method:"HEAD", cache:"no-store" })
+    .then(function(h){
+      if (h.status === 404){ return; } // aún generando
+      if (h.status === 204){
+        resetUI();
+        return;
+      }
+      if (h.status === 200){
+        setTimeout(function(){
+          fetch("/download/" + jobId + "?fmt=excel", { method:"HEAD", cache:"no-store" })
+          .then(function(h2){
+            if (h2.status === 200){
+              stopPolling();
+              triggerExcelDownload(jobId);
+              toggleForm(true);
+              hide(loadingDiv);
+              cancelBtn && (cancelBtn.disabled = true);
+              currentJobId = null;
+              clearInputs();
+            }
+          });
+        }, 300);
+      }
+    })
+    .catch(function(){ /* red transitoria */ });
+  }, 2000);
+}
+
+function stopPolling(){
+  if (pollTimer){ clearInterval(pollTimer); pollTimer = null; }
+}
+
+// Submit
+if (form){
+  form.addEventListener("submit", function(e){
+    e.preventDefault();
+
+    // Forzar validación HTML5 si el form tiene novalidate
+    if (!form.reportValidity()) return;
+
+    var pages = 1;
+    var pv = pagesInp && pagesInp.value ? parseInt(pagesInp.value,10) : 1;
+    if (!isNaN(pv)) pages = Math.max(1, Math.min(pv, 50));
+
+    var payload = {
+      sitio: portalSel ? portalSel.value : "",
+      cargo: keywordInp ? (keywordInp.value || "").trim() : "",
+      ubicacion: locationInp ? (locationInp.value || "").trim() : "",
+      pages: pages,
+      formato: "excel"
+    };
+
+    toggleForm(false);
+    showFlex(loadingDiv);
+
+    fetch("/scrape", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify(payload)
+    })
+    .then(function(res){
+      if (!res.ok) return res.text().then(function(t){ throw new Error(t || ("HTTP "+res.status)); });
+      return res.json();
+    })
+    .then(function(data){
+      if (!data || !data.job_id) throw new Error("El backend no devolvió job_id.");
+      currentJobId = data.job_id;
+      startPolling(currentJobId);
+    })
+    .catch(function(err){
+      alert("No se pudo iniciar el scraping: " + (err && err.message ? err.message : String(err)));
+      resetUI();
+    });
+  });
+}
+
+// Cancelar
+var cancelBtn = document.getElementById("btnCancel");
+if (cancelBtn){
+  cancelBtn.addEventListener("click", function(){
+    if (!currentJobId){ resetUI(); return; }
+    stopPolling();
+    fetch("/stop-scrape", {
+      method:"POST",
+      headers:{ "Content-Type":"application/json" },
+      body: JSON.stringify({ job_id: currentJobId })
+    })
+    .finally(function(){
+      triggerExcelDownload(currentJobId);
+      enable(form, true);
+      hide(loadingDiv);
+      clearInputs();
+      currentJobId = null;
+    });
+  });
+}
+  </script>
+</body>
+</html>
