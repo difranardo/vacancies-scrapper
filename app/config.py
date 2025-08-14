@@ -44,7 +44,7 @@ REPORTS_DIR: Path = (PROJECT_ROOT / "reports").resolve()
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
 
 # ── Exportables ─────────────────────────────────────────────
-__all__ = [
+_all_ = [
     "REPORTS_DIR", "HEADLESS",
     "GOOGLE_CLIENT_ID",
     "GOOGLE_CLIENT_SECRET",
