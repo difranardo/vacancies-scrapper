@@ -10,6 +10,9 @@ var loadingDiv   = document.getElementById("loading");
 var cancelBtn    = document.getElementById("btnCancel");
 var downloadWrap = document.getElementById("downloadWrap");
 var btnExcel     = document.getElementById("btnExcel");
+var astK = document.getElementById("asterisk-keyword");
+var astL = document.getElementById("asterisk-location");
+
 
 /* ============================= Estado ============================ */
 var currentJobId = null;      // último job activo
@@ -54,6 +57,14 @@ function showToast(message) {
       }
     }, 500); // Esperar a que la transición de opacidad termine
   }, 4000);
+}
+
+function updateRequiredByPortal() {
+  var isCT = portalSel && portalSel.value === "computrabajo";
+  if (keywordInp)  keywordInp.required  = isCT;
+  if (locationInp) locationInp.required = isCT;
+  if (astK) astK.toggleAttribute("hidden", !isCT);
+  if (astL) astL.toggleAttribute("hidden", !isCT);
 }
 
 function setUIRunning(running){
@@ -143,15 +154,15 @@ document.addEventListener("DOMContentLoaded", function(){
   var keywordInp  = document.getElementById("keyword");
   var locationInp = document.getElementById("location");
 
+  updateRequiredByPortal();
+  if (portalSel) portalSel.addEventListener("change", updateRequiredByPortal);
+
   if (form){
     form.addEventListener("submit", function(e){
       e.preventDefault();
 
-      // Marcar campos como obligatorios
-      if (keywordInp)  keywordInp.required  = true;
-      if (locationInp) locationInp.required = true;
+      updateRequiredByPortal();
 
-      // Si algún campo falla la validación nativa, cortar
       if (!form.reportValidity()) return;
 
       var pagesVal = 1;

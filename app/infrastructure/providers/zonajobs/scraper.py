@@ -416,52 +416,88 @@ class ZonaJobsScraper:
                 data["error"] = "cancelado"
                 return data
 
+
             # ─────────────────────────────────────────────
-            # EMPRESA (clase → JSON-LD → Confidencial → link perfil)
+            # EMPRESA (ZonaJobs: data-url + .sc-glwGys → slug → variantes → JSON-LD)
             # ─────────────────────────────────────────────
             empresa_txt: Optional[str] = None
+            try:
+                dp.wait_for_function("""
+                () => {
+                    const selA = document.querySelector("span[data-url^='/perfiles/empresa_'] .sc-glwGys");
+                    const selB = document.querySelector("p.sc-ktJJTZ, p.sc-gCeyOJ, p.sc-hyMgjL");
+                    return (selA && selA.textContent && selA.textContent.trim().length > 0) ||
+                        (selB && selB.textContent && selB.textContent.trim().length > 0);
+                }
+                """, timeout=7000)
+            except Exception:
+                pass
 
-            # 1) Clase concreta vista en tus HTML
-            loc_emp = dp.locator("#section-detalle .sc-gDrLyk, .sc-gDrLyk").first
-            if loc_emp.count():
-                empresa_txt = (loc_emp.inner_text() or "").strip()
+            empresa = None
 
-            # 2) JSON-LD muy fiable
-            if not empresa_txt:
+            # 1) JSON-LD primero (si no dice confidencial)
+            if not empresa:
                 try:
-                    org_name = dp.evaluate("""
-                        () => {
-                        for (const b of document.querySelectorAll('script[type="application/ld+json"]')){
-                            try{
-                            const j = JSON.parse(b.textContent||'{}');
+                    org = dp.evaluate("""
+                    () => {
+                        for (const s of document.querySelectorAll('script[type="application/ld+json"]')) {
+                        try {
+                            const j = JSON.parse(s.textContent||'{}');
                             const n = j?.hiringOrganization?.name || j?.organization?.name || j?.publisher?.name;
-                            if (n) return (''+n).trim();
-                            }catch(e){}
+                            if (n && typeof n === 'string') return n.trim();
+                        } catch(e) {}
                         }
                         return null;
-                        }
+                    }
                     """)
-                    if org_name:
-                        empresa_txt = org_name
+                    if org and "confidencial" not in org.lower():
+                        empresa = org
                 except Exception:
                     pass
 
-            # 3) Confidencial (texto)
-            if not empresa_txt:
+            # 2) XPaths en cascada
+            def get_xpath(xp):
                 try:
-                    loc_conf = dp.get_by_text(re.compile(r"\bConfidencial\b", re.I)).first
-                    if loc_conf.count():
-                        empresa_txt = (loc_conf.inner_text() or "").strip()
+                    h = dp.locator(f"xpath={xp}").first
+                    if h.count():
+                        t = (h.inner_text() or h.text_content() or "").strip()
+                        return t or None
                 except Exception:
-                    pass
+                    return None
+                return None
 
-            # 4) Link a perfil de empresa
-            if not empresa_txt:
-                link_emp = dp.locator("#section-detalle a[href*='/perfiles/empresa']").first
-                if link_emp.count():
-                    empresa_txt = (link_emp.inner_text() or "").strip()
+            if not empresa:
+                empresa = ( get_xpath("(//span[starts-with(@data-url,'/perfiles/empresa_')]//*[contains(@class,'sc-glwGys')])[1]")
+                        or get_xpath("(//p[contains(@class,'sc-ktJJTZ') or contains(@class,'sc-gCeyOJ') or contains(@class,'sc-hyMgjL')])[1]")
+                        or get_xpath("(//p[.//div[contains(@class,'company-verified')]])[1]")
+                        or get_xpath("(//*[contains(normalize-space(.),'Seguir empresa')]/ancestor::*[self::div or self::section or self::header][1]/preceding::p[1])[1]") )
 
-            data["empresa"] = empresa_txt or ""
+            # 3) Slug del perfil (último recurso)
+            if not empresa:
+                href = dp.eval_on_selector(
+                    "xpath=(//*[@data-url and starts-with(@data-url,'/perfiles/empresa_')][1])",
+                    "n => n.getAttribute('data-url')"
+                ) or dp.eval_on_selector(
+                    "xpath=(//a[starts-with(@href,'/perfiles/empresa_')][1])",
+                    "n => n.getAttribute('href')"
+                )
+                if href:
+                    import re
+                    from urllib.parse import unquote
+                    m = re.search(r"/perfiles/empresa_([a-z0-9\\-_]+)", href, re.I)
+                    if m:
+                        slug = unquote(m.group(1)).replace("-", " ").replace("_", " ").strip().title()
+                        slug = re.sub(r"\\bS\\.?\\s*A\\.?\\b", "SA", slug, flags=re.I)
+                        slug = re.sub(r"\\bS\\.?\\s*R\\.?\\s*L\\.?\\b", "SRL", slug, flags=re.I)
+                        empresa = slug
+
+            # 4) Confidencial
+            if not empresa:
+                c = get_xpath("(//*[contains(translate(.,'CONFIDENCIAL','confidencial'),'confidencial')])[1]")
+                empresa = "Confidencial" if c else ""
+
+            data["empresa"] = empresa or ""
+
 
             if self.job_id and ask_to_stop(self.job_id):
                 data["error"] = "cancelado"
@@ -490,21 +526,6 @@ class ZonaJobsScraper:
                 data["ubicacion"] = ubi_loc.inner_text().strip() if ubi_loc.count() else ""
             except Exception:
                 data["ubicacion"] = ""
-
-            # ─────────────────────────────────────────────
-            # INDUSTRIA y TAMAÑO EMPRESA (opcional)
-            # ─────────────────────────────────────────────
-            try:
-                ind_loc = dp.locator("#section-detalle p.sc-jNIAtH, p.sc-jNIAtH").first
-                data["industria"] = ind_loc.inner_text().strip() if ind_loc.count() else ""
-            except Exception:
-                data["industria"] = ""
-
-            try:
-                size_loc = dp.locator("#section-detalle span.sc-hvIHgf, span.sc-hvIHgf").first
-                data["tamano_empresa"] = size_loc.inner_text().strip() if size_loc.count() else ""
-            except Exception:
-                data["tamano_empresa"] = ""
 
             try:
                         # 1. Buscamos el encabezado "Descripción del puesto" como un ancla fiable.

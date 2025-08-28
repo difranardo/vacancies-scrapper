@@ -18,6 +18,7 @@
       --line:#E5E7EB;            /* bordes sutiles */
       --radius:14px;
       --shadow:0 10px 30px rgba(2, 16, 40, .06);
+      .req-asterisk{ color:#e11d48; margin-left:.25rem; font-weight:700; }
     }
 
     /* Reset & base */
@@ -159,13 +160,13 @@
       <div class="card-body">
         <form id="scrapeForm" autocomplete="off" novalidate>
           <div>
-            <label for="keyword">Puesto *</label>
-            <input id="keyword" name="keyword" placeholder="QA, Python, Designer…" required />
+            <label for="keyword">Puesto <span id="asterisk-keyword" class="req-asterisk" hidden>*</span></label>
+            <input id="keyword" name="keyword" placeholder="QA, Python, Designer…" />
           </div>
 
           <div>
-            <label for="location">Ubicación *</label>
-            <select id="location" name="location" required>
+            <label for="location">Ubicación <span id="asterisk-location" class="req-asterisk" hidden>*</span></label>
+            <select id="location" name="location">
             <option value="" disabled selected>Seleccionar provincia...</option>
             <option value="Capital Federal">Capital Federal</option>
             <option value="Gran Buenos Aires">Gran Buenos Aires (GBA)</option>
@@ -239,6 +240,9 @@
     var pagesInp     = document.getElementById("pages");
     var loadingDiv   = document.getElementById("loading");
     var cancelBtn    = document.getElementById("btnCancel");
+    var astK = document.getElementById("asterisk-keyword");
+    var astL = document.getElementById("asterisk-location");
+
 
     // Estado
     var currentJobId = null;
@@ -267,9 +271,17 @@
   currentJobId = null;
 }
 
-// Siempre obligatorios
-if (keywordInp)  keywordInp.required  = true;
-if (locationInp) locationInp.required = true;
+  function updateRequiredByPortal() {
+    var isCT = portalSel && portalSel.value === "computrabajo";
+    if (keywordInp){  keywordInp.required  = isCT; keywordInp.setAttribute("aria-required", String(isCT)); }
+    if (locationInp){ locationInp.required = isCT; locationInp.setAttribute("aria-required", String(isCT)); }
+    if (astK) astK.toggleAttribute("hidden", !isCT);
+    if (astL) astL.toggleAttribute("hidden", !isCT);
+  }
+
+  updateRequiredByPortal();
+  if (portalSel) portalSel.addEventListener("change", updateRequiredByPortal);
+
 
 // Descarga Excel con verificación HEAD
 function triggerExcelDownload(jobId){
@@ -332,7 +344,20 @@ if (form){
   form.addEventListener("submit", function(e){
     e.preventDefault();
 
-    // Forzar validación HTML5 si el form tiene novalidate
+    updateRequiredByPortal();
+
+    var isCT = portalSel && portalSel.value === "computrabajo";
+    if (isCT) {
+      var kw  = keywordInp  ? (keywordInp.value  || "").trim() : "";
+      var loc = locationInp ? (locationInp.value || "").trim() : "";
+      if (!kw || !loc) {
+        alert("En Computrabajo, 'Puesto' y 'Ubicación' son obligatorios.");
+        if (!kw && keywordInp)        keywordInp.focus();
+        else if (!loc && locationInp) locationInp.focus();
+        return; // corta el submit
+      }
+    }
+
     if (!form.reportValidity()) return;
 
     var pages = 1;
